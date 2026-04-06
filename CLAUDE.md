@@ -9,6 +9,7 @@ The canonical specification is in `docs/specification.md`. The architecture is d
 ## Current implementations
 
 - **Python** — `src/testmd/` (reference implementation)
+- **Go** — `cmd/testmd/` + `internal/` (single binary)
 
 ## Key principles
 
@@ -36,9 +37,16 @@ testmd [--testmd PATH] gc
 testmd [--testmd PATH] ci [--report-md F] [--report-json F]
 ```
 
-## Running tests (Python)
+## Running tests
 
+Python:
 ```
 pip install -e . --break-system-packages
 python -m pytest tests/ -v
+```
+
+Go:
+```
+go build -o ./testmd-go ./cmd/testmd/
+go test ./internal/...
 ```

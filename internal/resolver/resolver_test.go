@@ -1,0 +1,463 @@
+package resolver
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/testmd/testmd/internal/models"
+)
+
+func defn(title string, onChange []string, matrix []models.MatrixEntry, explicitID string, sourceFile string) models.TestDefinition {
+	if onChange == nil {
+		onChange = []string{"src/**/*"}
+	}
+	if sourceFile == "" {
+		sourceFile = "TEST.md"
+	}
+	return models.TestDefinition{
+		Title:       title,
+		ExplicitID:  explicitID,
+		OnChange:    onChange,
+		Matrix:      matrix,
+		Description: "desc",
+		SourceFile:  sourceFile,
+		SourceLine:  1,
+	}
+}
+
+func instance(tid, title string, labels map[string]string, matchedFiles []string, contentHash string, fileHashes map[string]string) *models.TestInstance {
+	if title == "" {
+		title = "Test"
+	}
+	if tid == "" {
+		tid = "aaa-bbb"
+	}
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	if contentHash == "" {
+		contentHash = "hash123"
+	}
+	if fileHashes == nil {
+		fileHashes = map[string]string{}
+	}
+	d := defn(title, nil, nil, "", "")
+	return &models.TestInstance{
+		ID:               tid,
+		Definition:       &d,
+		Labels:           labels,
+		ResolvedPatterns: []string{"src/**/*"},
+		MatchedFiles:     matchedFiles,
+		ContentHash:      contentHash,
+		FileHashes:       fileHashes,
+	}
+}
+
+func emptyState() *models.State {
+	return &models.State{Version: 1, Tests: map[string]*models.TestRecord{}}
+}
+
+func TestBuildInstances(t *testing.T) {
+	t.Run("without_matrix", func(t *testing.T) {
+		tmp := t.TempDir()
+		os.MkdirAll(filepath.Join(tmp, "src"), 0755)
+		os.WriteFile(filepath.Join(tmp, "src", "main.py"), []byte("print('hi')"), 0644)
+		sf := filepath.Join(tmp, "TEST.md")
+
+		d := defn("Test", []string{"src/*.py"}, nil, "", sf)
+		instances, err := BuildInstances(tmp, []models.TestDefinition{d}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(instances) != 1 {
+			t.Fatalf("expected 1 instance, got %d", len(instances))
+		}
+		found := false
+		for _, f := range instances[0].MatchedFiles {
+			if f == "src/main.py" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected src/main.py in matched_files, got %v", instances[0].MatchedFiles)
+		}
+		if len(instances[0].Labels) != 0 {
+			t.Errorf("expected empty labels, got %v", instances[0].Labels)
+		}
+	})
+
+	t.Run("with_matrix_const", func(t *testing.T) {
+		tmp := t.TempDir()
+		os.WriteFile(filepath.Join(tmp, "main.py"), []byte("x"), 0644)
+		sf := filepath.Join(tmp, "TEST.md")
+
+		d := defn("Test", []string{"main.py"}, []models.MatrixEntry{
+			{Const: map[string][]string{"env": {"dev", "prod"}}},
+		}, "", sf)
+		instances, err := BuildInstances(tmp, []models.TestDefinition{d}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(instances) != 2 {
+			t.Fatalf("expected 2 instances, got %d", len(instances))
+		}
+		labelsList := make([]map[string]string, len(instances))
+		for i, inst := range instances {
+			labelsList[i] = inst.Labels
+		}
+		assertContainsMap(t, labelsList, map[string]string{"env": "dev"})
+		assertContainsMap(t, labelsList, map[string]string{"env": "prod"})
+	})
+
+	t.Run("with_matrix_match", func(t *testing.T) {
+		tmp := t.TempDir()
+		os.MkdirAll(filepath.Join(tmp, "svcA", "src"), 0755)
+		os.WriteFile(filepath.Join(tmp, "svcA", "src", "a.py"), []byte("a"), 0644)
+		os.MkdirAll(filepath.Join(tmp, "svcB", "src"), 0755)
+		os.WriteFile(filepath.Join(tmp, "svcB", "src", "b.py"), []byte("b"), 0644)
+		sf := filepath.Join(tmp, "TEST.md")
+
+		d := defn("Test", []string{"$svc/src/*.py"}, []models.MatrixEntry{
+			{Match: []string{"$svc/src"}},
+		}, "", sf)
+		instances, err := BuildInstances(tmp, []models.TestDefinition{d}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(instances) != 2 {
+			t.Fatalf("expected 2 instances, got %d", len(instances))
+		}
+	})
+
+	t.Run("auto_discovery_without_matrix", func(t *testing.T) {
+		tmp := t.TempDir()
+		os.MkdirAll(filepath.Join(tmp, "alpha", "code"), 0755)
+		os.WriteFile(filepath.Join(tmp, "alpha", "code", "x.py"), []byte("x"), 0644)
+		os.MkdirAll(filepath.Join(tmp, "beta", "code"), 0755)
+		os.WriteFile(filepath.Join(tmp, "beta", "code", "y.py"), []byte("y"), 0644)
+		sf := filepath.Join(tmp, "TEST.md")
+
+		d := defn("Test", []string{"$svc/code/*.py"}, nil, "", sf)
+		instances, err := BuildInstances(tmp, []models.TestDefinition{d}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(instances) != 2 {
+			t.Fatalf("expected 2 instances, got %d", len(instances))
+		}
+		svcs := map[string]bool{}
+		for _, inst := range instances {
+			svcs[inst.Labels["svc"]] = true
+		}
+		if !svcs["alpha"] || !svcs["beta"] {
+			t.Errorf("expected alpha and beta, got %v", svcs)
+		}
+	})
+
+	t.Run("rebase_from_subdir", func(t *testing.T) {
+		tmp := t.TempDir()
+		os.MkdirAll(filepath.Join(tmp, "sub", "lib"), 0755)
+		os.WriteFile(filepath.Join(tmp, "sub", "lib", "a.py"), []byte("a"), 0644)
+		sf := filepath.Join(tmp, "sub", "TEST.md")
+
+		d := defn("Test", []string{"./lib/*.py"}, nil, "", sf)
+		instances, err := BuildInstances(tmp, []models.TestDefinition{d}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(instances) != 1 {
+			t.Fatalf("expected 1 instance, got %d", len(instances))
+		}
+		found := false
+		for _, f := range instances[0].MatchedFiles {
+			if f == "sub/lib/a.py" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected sub/lib/a.py in matched_files, got %v", instances[0].MatchedFiles)
+		}
+	})
+}
+
+func TestComputeStatuses(t *testing.T) {
+	t.Run("pending", func(t *testing.T) {
+		inst := instance("", "", nil, nil, "", nil)
+		st := emptyState()
+		results := ComputeStatuses([]*models.TestInstance{inst}, st)
+		if results[0].Status != "pending" {
+			t.Errorf("expected pending, got %s", results[0].Status)
+		}
+		if results[0].Record != nil {
+			t.Errorf("expected nil record for pending")
+		}
+	})
+
+	t.Run("resolved", func(t *testing.T) {
+		inst := instance("aaa-bbb", "", nil, nil, "abc", nil)
+		st := emptyState()
+		st.Tests["aaa-bbb"] = &models.TestRecord{ContentHash: "abc", Status: "resolved"}
+		results := ComputeStatuses([]*models.TestInstance{inst}, st)
+		if results[0].Status != "resolved" {
+			t.Errorf("expected resolved, got %s", results[0].Status)
+		}
+	})
+
+	t.Run("outdated", func(t *testing.T) {
+		inst := instance("aaa-bbb", "", nil, nil, "new_hash", nil)
+		st := emptyState()
+		st.Tests["aaa-bbb"] = &models.TestRecord{ContentHash: "old_hash", Status: "resolved"}
+		results := ComputeStatuses([]*models.TestInstance{inst}, st)
+		if results[0].Status != "outdated" {
+			t.Errorf("expected outdated, got %s", results[0].Status)
+		}
+	})
+
+	t.Run("failed", func(t *testing.T) {
+		inst := instance("aaa-bbb", "", nil, nil, "h", nil)
+		st := emptyState()
+		st.Tests["aaa-bbb"] = &models.TestRecord{ContentHash: "h", Status: "failed"}
+		results := ComputeStatuses([]*models.TestInstance{inst}, st)
+		if results[0].Status != "failed" {
+			t.Errorf("expected failed, got %s", results[0].Status)
+		}
+	})
+}
+
+func TestResolveTest(t *testing.T) {
+	t.Run("updates_state", func(t *testing.T) {
+		inst := instance("aaa-bbb", "", nil, []string{"f.txt"}, "ch", map[string]string{"f.txt": "fh"})
+		st := emptyState()
+		ResolveTest(st, inst)
+
+		rec := st.Tests["aaa-bbb"]
+		if rec == nil {
+			t.Fatal("expected record")
+		}
+		if rec.Status != "resolved" {
+			t.Errorf("expected status 'resolved', got %q", rec.Status)
+		}
+		if rec.ContentHash != "ch" {
+			t.Errorf("expected content_hash 'ch', got %q", rec.ContentHash)
+		}
+		if rec.Files["f.txt"] != "fh" {
+			t.Errorf("expected files[f.txt]='fh', got %v", rec.Files)
+		}
+		if rec.ResolvedAt == nil {
+			t.Error("expected resolved_at to be set")
+		}
+		if rec.FailedAt != nil {
+			t.Error("expected failed_at to be nil")
+		}
+		if rec.Message != nil {
+			t.Error("expected message to be nil")
+		}
+	})
+}
+
+func TestFailTest(t *testing.T) {
+	t.Run("updates_state_with_message", func(t *testing.T) {
+		inst := instance("", "", nil, nil, "", nil)
+		st := emptyState()
+		FailTest(st, inst, "broken")
+
+		rec := st.Tests["aaa-bbb"]
+		if rec == nil {
+			t.Fatal("expected record")
+		}
+		if rec.Status != "failed" {
+			t.Errorf("expected status 'failed', got %q", rec.Status)
+		}
+		if rec.Message == nil || *rec.Message != "broken" {
+			t.Errorf("expected message 'broken', got %v", rec.Message)
+		}
+		if rec.FailedAt == nil {
+			t.Error("expected failed_at to be set")
+		}
+	})
+}
+
+func TestGCState(t *testing.T) {
+	t.Run("removes_orphans", func(t *testing.T) {
+		inst := instance("aaa-bbb", "", nil, nil, "", nil)
+		st := emptyState()
+		st.Tests["aaa-bbb"] = &models.TestRecord{Status: "resolved"}
+		st.Tests["old-one"] = &models.TestRecord{Status: "resolved"}
+
+		removed := GCState(st, []*models.TestInstance{inst})
+		if removed != 1 {
+			t.Errorf("expected 1 removed, got %d", removed)
+		}
+		if _, ok := st.Tests["old-one"]; ok {
+			t.Error("old-one should be removed")
+		}
+		if _, ok := st.Tests["aaa-bbb"]; !ok {
+			t.Error("aaa-bbb should be kept")
+		}
+	})
+
+	t.Run("nothing_to_gc", func(t *testing.T) {
+		inst := instance("aaa-bbb", "", nil, nil, "", nil)
+		st := emptyState()
+		st.Tests["aaa-bbb"] = &models.TestRecord{Status: "resolved"}
+
+		removed := GCState(st, []*models.TestInstance{inst})
+		if removed != 0 {
+			t.Errorf("expected 0 removed, got %d", removed)
+		}
+	})
+}
+
+func TestFindInstances(t *testing.T) {
+	mkInstances := func() []*models.TestInstance {
+		return []*models.TestInstance{
+			instance("abc123-def456", "", nil, nil, "", nil),
+			instance("abc123-aaa111", "", nil, nil, "", nil),
+			instance("xyz789-bbb222", "", nil, nil, "", nil),
+		}
+	}
+
+	t.Run("exact_match", func(t *testing.T) {
+		insts := mkInstances()
+		result := FindInstances(insts, "abc123-def456")
+		if len(result) != 1 || result[0].ID != "abc123-def456" {
+			t.Errorf("expected exact match, got %v", ids(result))
+		}
+	})
+
+	t.Run("first_part_match", func(t *testing.T) {
+		insts := mkInstances()
+		result := FindInstances(insts, "abc123")
+		if len(result) != 2 {
+			t.Errorf("expected 2 matches, got %d: %v", len(result), ids(result))
+		}
+	})
+
+	t.Run("prefix_match", func(t *testing.T) {
+		insts := mkInstances()
+		result := FindInstances(insts, "xyz")
+		if len(result) != 1 || result[0].ID != "xyz789-bbb222" {
+			t.Errorf("expected xyz789-bbb222, got %v", ids(result))
+		}
+	})
+
+	t.Run("no_match", func(t *testing.T) {
+		insts := mkInstances()
+		result := FindInstances(insts, "zzzzz")
+		if len(result) != 0 {
+			t.Errorf("expected no matches, got %v", ids(result))
+		}
+	})
+}
+
+func TestChangedFiles(t *testing.T) {
+	t.Run("no_record", func(t *testing.T) {
+		inst := instance("", "", nil, []string{"a.txt", "b.txt"}, "", nil)
+		result := ChangedFiles(inst, nil)
+		if len(result) != 2 {
+			t.Errorf("expected 2 files, got %v", result)
+		}
+	})
+
+	t.Run("modified_file", func(t *testing.T) {
+		inst := instance("", "", nil, nil, "", map[string]string{"a.txt": "new_hash", "b.txt": "same"})
+		rec := &models.TestRecord{Files: map[string]string{"a.txt": "old_hash", "b.txt": "same"}}
+		result := ChangedFiles(inst, rec)
+		if len(result) != 1 || result[0] != "a.txt" {
+			t.Errorf("expected [a.txt], got %v", result)
+		}
+	})
+
+	t.Run("added_file", func(t *testing.T) {
+		inst := instance("", "", nil, nil, "", map[string]string{"a.txt": "h1", "new.txt": "h2"})
+		rec := &models.TestRecord{Files: map[string]string{"a.txt": "h1"}}
+		result := ChangedFiles(inst, rec)
+		if len(result) != 1 || result[0] != "new.txt" {
+			t.Errorf("expected [new.txt], got %v", result)
+		}
+	})
+
+	t.Run("deleted_file", func(t *testing.T) {
+		inst := instance("", "", nil, nil, "", map[string]string{"a.txt": "h1"})
+		rec := &models.TestRecord{Files: map[string]string{"a.txt": "h1", "gone.txt": "h2"}}
+		result := ChangedFiles(inst, rec)
+		if len(result) != 1 || result[0] != "gone.txt" {
+			t.Errorf("expected [gone.txt], got %v", result)
+		}
+	})
+
+	t.Run("no_changes", func(t *testing.T) {
+		inst := instance("", "", nil, nil, "", map[string]string{"a.txt": "h"})
+		rec := &models.TestRecord{Files: map[string]string{"a.txt": "h"}}
+		result := ChangedFiles(inst, rec)
+		if len(result) != 0 {
+			t.Errorf("expected [], got %v", result)
+		}
+	})
+}
+
+func TestValidateMatrixVars(t *testing.T) {
+	t.Run("undefined_var_raises", func(t *testing.T) {
+		d := defn("Test", []string{"$svc/src/$module/*.py"}, []models.MatrixEntry{
+			{Match: []string{"$svc/src"}},
+		}, "", "")
+		err := validateMatrixVars(&d)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "not defined in matrix") {
+			t.Errorf("expected 'not defined in matrix' in error, got %q", err.Error())
+		}
+	})
+
+	t.Run("unused_var_warns", func(t *testing.T) {
+		// This test verifies the function doesn't error (the warning goes to stderr)
+		d := defn("Test", []string{"src/*.py"}, []models.MatrixEntry{
+			{Const: map[string][]string{"env": {"dev"}}},
+		}, "", "")
+		err := validateMatrixVars(&d)
+		if err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("valid_matrix_no_error", func(t *testing.T) {
+		d := defn("Test", []string{"$svc/src/*.py"}, []models.MatrixEntry{
+			{Match: []string{"$svc/src"}},
+		}, "", "")
+		err := validateMatrixVars(&d)
+		if err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+}
+
+func ids(insts []*models.TestInstance) []string {
+	result := make([]string, len(insts))
+	for i, inst := range insts {
+		result[i] = inst.ID
+	}
+	return result
+}
+
+func assertContainsMap(t *testing.T, list []map[string]string, want map[string]string) {
+	t.Helper()
+	for _, m := range list {
+		if len(m) != len(want) {
+			continue
+		}
+		match := true
+		for k, v := range want {
+			if m[k] != v {
+				match = false
+				break
+			}
+		}
+		if match {
+			return
+		}
+	}
+	t.Errorf("expected %v in %v", want, list)
+}

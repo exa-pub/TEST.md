@@ -208,3 +208,6 @@ __marimo__/
 
 *.tmp/
 .devcontainer/.persist/
+
+.claude/settings.local.json
+bin/

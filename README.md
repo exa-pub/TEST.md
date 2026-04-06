@@ -47,8 +47,27 @@ OK: all tests resolved
 
 ## Install
 
+```bash
+curl -fsSL https://raw.githubusercontent.com/exa-pub/test.md/main/install.sh | sh
 ```
-pip install -e .
+
+Or with Go:
+```bash
+go install github.com/testmd/testmd/cmd/testmd@latest
+```
+
+### Agent Skill for Claude Code
+
+testmd ships with an [Agent Skill](https://support.claude.com/en/articles/12512176-what-are-skills) that teaches Claude Code the testmd workflow — when to run `status`, how to use `get` instead of reading raw markdown, and how to resolve/fail tests correctly.
+
+```
+/plugin marketplace add exa-pub/test.md
+/plugin install testmd@testmd
+```
+
+Or install directly:
+```
+/plugin install-from-github exa-pub/test.md/skills/testmd
 ```
 
 ## Quick start
@@ -74,23 +93,54 @@ testmd gc              # clean up orphaned records
 testmd ci              # exit 1 if anything unresolved
 ```
 
+## CI
+
+### GitHub Actions
+
+```yaml
+- name: Install testmd
+  run: curl -fsSL https://raw.githubusercontent.com/exa-pub/test.md/main/install.sh | sh
+
+- name: Check manual tests
+  run: testmd ci --report-md test-report.md
+
+- name: Upload report
+  if: always()
+  uses: actions/upload-artifact@v4
+  with:
+    name: testmd-report
+    path: test-report.md
+```
+
+### GitLab CI
+
+```yaml
+testmd:
+  stage: test
+  before_script:
+    - curl -fsSL https://raw.githubusercontent.com/exa-pub/test.md/main/install.sh | sh
+  script:
+    - testmd ci --report-md report.md --report-json report.json
+  artifacts:
+    when: always
+    paths:
+      - report.md
+      - report.json
+    reports:
+      dotenv: report.json
+```
+
+### Generic CI
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/exa-pub/test.md/main/install.sh | sh
+testmd ci  # exits 1 if any test is not resolved
+```
+
 ## Documentation
 
 - [Specification](docs/specification.md) — full format and behavior reference
 - [CLI Reference](docs/cli.md) — all commands and options
 - [Architecture](docs/architecture.md) — internal design and data flow
-- [Examples](docs/examples.md) — common usage patterns
+- [Examples](docs/examples.md) — labels, matrix, includes, and more
 
-## How state works
-
-State is stored at the bottom of TEST.md itself:
-
-````markdown
-<!-- State
-```testmd
-{"version":1,"tests":{"a1b2c3-e3b0c4":{"status":"resolved",...}}}
-```
--->
-````
-
-No `.testmd/` directory, no external databases. The state is committed with the tests, visible in diffs, and invisible in markdown renderers.

@@ -47,6 +47,11 @@ def build_instances(
                 resolved_patterns.append(resolved)
                 all_files.update(resolve_files(root, pat, labels, ignore))
 
+            # Exclude the source TEST.md itself — it contains the state
+            # block which changes on every resolve, causing a loop.
+            self_rel = str(defn.source_file.relative_to(root))
+            all_files.discard(self_rel)
+
             matched = sorted(all_files)
             content_hash, file_hashes = hash_files(root, matched)
             tid = make_id(defn.title, defn.explicit_id, labels)

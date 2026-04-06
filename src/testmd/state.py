@@ -22,7 +22,7 @@ def load_state(test_file: Path) -> dict:
 def save_state(test_file: Path, state: dict) -> None:
     """Write state as formatted JSON wrapped in <!-- State -->."""
     text = test_file.read_text()
-    body = json.dumps(state, ensure_ascii=False, indent=2)
+    body = json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True)
     block = f"<!-- State\n```testmd\n{body}\n```\n-->\n"
 
     m = _STATE_RE.search(text)

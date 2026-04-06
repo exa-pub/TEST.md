@@ -1,10 +1,14 @@
 # testmd
 
-Track manual tests in markdown. Know when they need re-checking.
+Executable contracts for your codebase: "if you changed X, verify Y".
 
 ## What it does
 
-You describe tests in natural language in a `TEST.md` file. testmd watches which source files each test covers. When those files change, the test is marked as outdated until someone re-verifies it.
+Every codebase has implicit rules — rename an API field and the docs break, change a schema and the migration needs updating. testmd makes these rules explicit and enforceable.
+
+You describe contracts in natural language in a `TEST.md` file. testmd watches which source files each contract covers. When those files change, the contract is marked as outdated until someone re-verifies it.
+
+This is especially useful when AI agents write code — they don't know your project's unwritten rules. An agent runs `testmd ci`, sees what its changes broke, and fixes the problems or reports what it can't resolve.
 
 ````markdown
 # Login page

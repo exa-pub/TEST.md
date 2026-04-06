@@ -1,12 +1,14 @@
 # testmd — Specification
 
-testmd is a tool for tracking manual and semi-automated tests described in natural language. Tests are defined in a `TEST.md` file using markdown, and the tool tracks which files changed and which tests need re-verification.
+testmd encodes cross-cutting rules — "if you changed X, verify Y" — as executable contracts in `TEST.md` files. Every codebase has implicit knowledge: rename an API field and the docs break, change a schema and the migration needs updating. testmd makes these rules explicit, trackable, and enforceable in CI.
+
+This is especially valuable when code is written by AI agents, which have no way of knowing a project's unwritten rules. An agent runs `testmd ci`, sees which contracts its changes have broken, and either fixes the issues or reports what it cannot resolve.
 
 ## Core loop
 
-1. Developer changes code
-2. `testmd status` shows which tests are affected (file hashes changed)
-3. Developer manually verifies and runs `testmd resolve <id>` or `testmd fail <id> <message>`
+1. Developer or agent changes code
+2. `testmd status` / `testmd ci` shows which contracts are affected (file hashes changed)
+3. The author verifies each flagged area and runs `testmd resolve <id>` or `testmd fail <id> <message>`
 4. CI calls `testmd ci` and fails if there are unresolved tests
 
 ## TEST.md format
@@ -245,9 +247,10 @@ Resolution order: exact → first-part → prefix.
 For each test instance:
 
 1. Expand `on_change` patterns into a file list (with label substitution)
-2. Sort files alphabetically
-3. For each file: `sha256(relative_path + "\0" + file_content)`
-4. Content hash: `sha256(concat(all_file_hashes))`
+2. Exclude the source TEST.md file itself (it contains the state block, which changes on every resolve)
+3. Sort files alphabetically
+4. For each file: `sha256(relative_path + "\0" + file_content)`
+5. Content hash: `sha256(concat(all_file_hashes))`
 
 The content hash is compared with the stored value. If different, the test status becomes `outdated`.
 

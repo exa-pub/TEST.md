@@ -5,6 +5,7 @@ from pathlib import Path
 import click
 
 from .parser import parse_testmd
+from .patterns import load_ignorefile
 from .report import (
     format_labels,
     print_get,
@@ -83,8 +84,11 @@ def _load(testmd: str | None):
             )
         definitions.extend(inc_defs)
 
+    ignorefile = frontmatter.get("ignorefile", ".gitignore")
+    ignore = load_ignorefile(root, ignorefile)
+
     try:
-        instances = build_instances(root, definitions)
+        instances = build_instances(root, definitions, ignore)
     except ValueError as e:
         raise click.ClickException(str(e)) from None
 
@@ -190,16 +194,10 @@ def get(ctx, test_id):
     matches = find_instances(instances, test_id)
     if not matches:
         raise click.ClickException(f"No test matching '{test_id}'")
-    for inst in matches:
-        rec = state["tests"].get(inst.id)
-        if rec is None:
-            s = "pending"
-        elif rec["content_hash"] != inst.content_hash:
-            s = "outdated"
-        else:
-            s = rec["status"]
+    results = compute_statuses(matches, state)
+    for i, (inst, s, rec) in enumerate(results):
         print_get(inst, s, rec)
-        if inst != matches[-1]:
+        if i < len(results) - 1:
             click.echo()
 
 

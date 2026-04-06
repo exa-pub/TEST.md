@@ -4,6 +4,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pathspec
+
 from .hashing import hash_files, make_id
 from .models import TestDefinition, TestInstance
 from .patterns import (
@@ -17,7 +19,9 @@ StatusResult = tuple[TestInstance, str, dict | None]
 
 
 def build_instances(
-    root: Path, definitions: list[TestDefinition]
+    root: Path,
+    definitions: list[TestDefinition],
+    ignore: pathspec.PathSpec | None = None,
 ) -> list[TestInstance]:
     """Expand definitions into concrete instances with computed hashes."""
     instances: list[TestInstance] = []
@@ -25,9 +29,9 @@ def build_instances(
     for defn in definitions:
         if defn.matrix:
             _validate_matrix_vars(defn)
-            label_combos = expand_matrix(root, defn.matrix)
+            label_combos = expand_matrix(root, defn.matrix, ignore)
         else:
-            label_combos = enumerate_labels(root, defn.on_change)
+            label_combos = enumerate_labels(root, defn.on_change, ignore)
 
         for labels in label_combos:
             resolved_patterns: list[str] = []
@@ -38,7 +42,7 @@ def build_instances(
                 for var, val in labels.items():
                     resolved = resolved.replace(f"${var}", val)
                 resolved_patterns.append(resolved)
-                all_files.update(resolve_files(root, pat, labels))
+                all_files.update(resolve_files(root, pat, labels, ignore))
 
             matched = sorted(all_files)
             content_hash, file_hashes = hash_files(root, matched)

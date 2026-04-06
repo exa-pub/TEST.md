@@ -47,15 +47,13 @@ Verify that service `$name` starts and responds to healthcheck.
 {
   "version": 1,
   "tests": {
-    "c9fdbc-e3b0c4": {
-      "title": "Parser correctness",
+    "ed4be2-e3b0c4": {
+      "title": "Service health",
       "labels": {},
-      "content_hash": "06cdffd728b2f5aeb6e7b40cb82836766afab008b8ef3bdb823018f90f8cb019",
-      "files": {
-        "src/testmd/parser.py": "36a1b6997b297b7b5207c45fd5f7ef70eb2412031cc3bfccfed5a48ef06c0c21"
-      },
+      "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "files": {},
       "status": "resolved",
-      "resolved_at": "2026-04-06T20:48:33.043731+00:00",
+      "resolved_at": "2026-04-06T21:02:35.001355+00:00",
       "failed_at": null,
       "message": null
     }

@@ -18,11 +18,16 @@ STATUS_ICONS = {
 
 
 def print_status(results: list[StatusResult]) -> None:
-    by_title: dict[str, list[StatusResult]] = {}
+    groups: list[tuple[str, list[StatusResult]]] = []
     for r in results:
-        by_title.setdefault(r[0].definition.title, []).append(r)
+        defn = r[0].definition
+        key = id(defn)
+        if groups and id(groups[-1][1][0][0].definition) == key:
+            groups[-1][1].append(r)
+        else:
+            groups.append((defn.title, [r]))
 
-    for title, group in by_title.items():
+    for title, group in groups:
         click.echo(click.style(title, bold=True))
         for inst, status, rec in group:
             _print_instance_line(inst, status, rec)
@@ -64,11 +69,15 @@ def print_get(inst: TestInstance, status: str, record: dict | None) -> None:
 def write_report_md(results: list[StatusResult], path: Path) -> None:
     lines = ["# Test Report", ""]
 
-    by_title: dict[str, list[StatusResult]] = {}
+    groups: list[tuple[str, list[StatusResult]]] = []
     for r in results:
-        by_title.setdefault(r[0].definition.title, []).append(r)
+        defn = r[0].definition
+        if groups and groups[-1][1][0][0].definition is defn:
+            groups[-1][1].append(r)
+        else:
+            groups.append((defn.title, [r]))
 
-    for title, group in by_title.items():
+    for title, group in groups:
         lines.append(f"## {title}")
         lines.append("")
         lines.append("| ID | Labels | Status | Message |")

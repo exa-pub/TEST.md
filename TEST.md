@@ -81,10 +81,10 @@ Read through each doc and verify:
       "title": "Python implementation matches Go"
     },
     "7a4284-e3b0c4": {
-      "content_hash": "c8762db815040c3004f1c36ab5fdb07c46b30e268a75a00afd222e3fb504ef61",
+      "content_hash": "1e3691c2806281031d1e4f04eb3d8b52a1c25d712e9e33d79893750389d5bee4",
       "failed_at": null,
       "files": {
-        "README.md": "15830eb1fb39190305f8b054f159aa7c078fef993674a6857f042e91faacb213",
+        "README.md": "8f6b34e0370aa4871e3201d354882276c7156a9c5b13189127a2ffec1fe12694",
         "docs/architecture.md": "bf31e22d52e6314d4e4ed026d387cf76e01eb45bf8d82e932b0e22dc89a920c4",
         "docs/cli.md": "58906b73f4d2f62296c59c2cc80fdd4d38a1184fd41c0d0265107f63d6342a85",
         "docs/examples.md": "67fbdbfbfca1a6571822cfb51783aa892c063e80ccbde3813a409dfc37a3275b",
@@ -92,7 +92,7 @@ Read through each doc and verify:
       },
       "labels": {},
       "message": null,
-      "resolved_at": "2026-04-06T23:19:57.603466+00:00",
+      "resolved_at": "2026-04-06T23:34:42.336868+00:00",
       "status": "resolved",
       "title": "Documentation is accurate"
     },

@@ -6,8 +6,6 @@ Agents don't know your project's unwritten rules. testmd makes them written — 
 
 ![testmd in terminal](docs/screenshot-terminal.png)
 
-![Claude Code working with testmd](docs/screenshot-claude.png)
-
 ## What it does
 
 Every codebase has implicit rules — rename an API field and the docs break, change a schema and the migration needs updating. testmd makes these rules explicit and enforceable.

@@ -27,22 +27,30 @@ def build_instances(
     instances: list[TestInstance] = []
 
     for defn in definitions:
-        if defn.matrix:
+        on_change = _rebase_patterns(root, defn.source_file, defn.on_change)
+        matrix = _rebase_matrix(root, defn.source_file, defn.matrix)
+
+        if matrix:
             _validate_matrix_vars(defn)
-            label_combos = expand_matrix(root, defn.matrix, ignore)
+            label_combos = expand_matrix(root, matrix, ignore)
         else:
-            label_combos = enumerate_labels(root, defn.on_change, ignore)
+            label_combos = enumerate_labels(root, on_change, ignore)
 
         for labels in label_combos:
             resolved_patterns: list[str] = []
             all_files: set[str] = set()
 
-            for pat in defn.on_change:
+            for pat in on_change:
                 resolved = pat
                 for var, val in labels.items():
                     resolved = resolved.replace(f"${var}", val)
                 resolved_patterns.append(resolved)
                 all_files.update(resolve_files(root, pat, labels, ignore))
+
+            # Exclude the source TEST.md itself — it contains the state
+            # block which changes on every resolve, causing a loop.
+            self_rel = str(defn.source_file.relative_to(root))
+            all_files.discard(self_rel)
 
             matched = sorted(all_files)
             content_hash, file_hashes = hash_files(root, matched)
@@ -161,6 +169,42 @@ def _validate_matrix_vars(defn: TestDefinition) -> None:
             f"not used in on_change",
             file=sys.stderr,
         )
+
+
+# ---------------------------------------------------------------------------
+# Pattern rebasing
+# ---------------------------------------------------------------------------
+
+
+def _rebase_patterns(
+    root: Path, source_file: Path, patterns: list[str]
+) -> list[str]:
+    """Adjust patterns from source_file-relative to root-relative."""
+    source_dir = source_file.parent
+    if source_dir == root:
+        return patterns
+    rel = source_dir.relative_to(root)
+    return [
+        f"./{rel}/{p[2:]}" if p.startswith("./") else f"./{rel}/{p}"
+        for p in patterns
+    ]
+
+
+def _rebase_matrix(
+    root: Path, source_file: Path, matrix: list[dict] | None
+) -> list[dict] | None:
+    if not matrix or source_file.parent == root:
+        return matrix
+    rebased = []
+    for entry in matrix:
+        new_entry = dict(entry)
+        if "match" in entry:
+            patterns = entry["match"]
+            if isinstance(patterns, str):
+                patterns = [patterns]
+            new_entry["match"] = _rebase_patterns(root, source_file, patterns)
+        rebased.append(new_entry)
+    return rebased
 
 
 # ---------------------------------------------------------------------------

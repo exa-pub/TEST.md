@@ -23,6 +23,7 @@ def _defn(
     on_change: list[str] | None = None,
     matrix: list[dict] | None = None,
     explicit_id: str | None = None,
+    source_file: Path | None = None,
 ) -> TestDefinition:
     return TestDefinition(
         title=title,
@@ -30,7 +31,7 @@ def _defn(
         on_change=on_change or ["src/**/*"],
         matrix=matrix,
         description="desc",
-        source_file=Path("TEST.md"),
+        source_file=source_file or Path("TEST.md"),
         source_line=1,
     )
 
@@ -62,7 +63,8 @@ class TestBuildInstances:
     def test_without_matrix(self, tmp_path: Path):
         (tmp_path / "src").mkdir()
         (tmp_path / "src" / "main.py").write_text("print('hi')")
-        defn = _defn(on_change=["src/*.py"])
+        sf = tmp_path / "TEST.md"
+        defn = _defn(on_change=["src/*.py"], source_file=sf)
         instances = build_instances(tmp_path, [defn])
         assert len(instances) == 1
         assert "src/main.py" in instances[0].matched_files
@@ -70,9 +72,11 @@ class TestBuildInstances:
 
     def test_with_matrix_const(self, tmp_path: Path):
         (tmp_path / "main.py").write_text("x")
+        sf = tmp_path / "TEST.md"
         defn = _defn(
             on_change=["main.py"],
             matrix=[{"const": {"env": ["dev", "prod"]}}],
+            source_file=sf,
         )
         instances = build_instances(tmp_path, [defn])
         assert len(instances) == 2
@@ -85,9 +89,11 @@ class TestBuildInstances:
         (tmp_path / "svcA" / "src" / "a.py").write_text("a")
         (tmp_path / "svcB" / "src").mkdir(parents=True)
         (tmp_path / "svcB" / "src" / "b.py").write_text("b")
+        sf = tmp_path / "TEST.md"
         defn = _defn(
             on_change=["$svc/src/*.py"],
             matrix=[{"match": "$svc/src"}],
+            source_file=sf,
         )
         instances = build_instances(tmp_path, [defn])
         assert len(instances) == 2
@@ -97,11 +103,21 @@ class TestBuildInstances:
         (tmp_path / "alpha" / "code" / "x.py").write_text("x")
         (tmp_path / "beta" / "code").mkdir(parents=True)
         (tmp_path / "beta" / "code" / "y.py").write_text("y")
-        defn = _defn(on_change=["$svc/code/*.py"])
+        sf = tmp_path / "TEST.md"
+        defn = _defn(on_change=["$svc/code/*.py"], source_file=sf)
         instances = build_instances(tmp_path, [defn])
         assert len(instances) == 2
         svcs = {i.labels["svc"] for i in instances}
         assert svcs == {"alpha", "beta"}
+
+    def test_rebase_from_subdir(self, tmp_path: Path):
+        (tmp_path / "sub" / "lib").mkdir(parents=True)
+        (tmp_path / "sub" / "lib" / "a.py").write_text("a")
+        sf = tmp_path / "sub" / "TEST.md"
+        defn = _defn(on_change=["./lib/*.py"], source_file=sf)
+        instances = build_instances(tmp_path, [defn])
+        assert len(instances) == 1
+        assert "sub/lib/a.py" in instances[0].matched_files
 
 
 class TestComputeStatuses:

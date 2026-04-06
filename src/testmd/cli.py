@@ -68,16 +68,22 @@ def _resolve_path(testmd: str | None) -> tuple[Path, Path]:
 
 def _load(testmd: str | None):
     test_file, root = _resolve_path(testmd)
-    frontmatter, definitions = parse_testmd(
-        test_file.read_text(), source_file=test_file
-    )
+    try:
+        frontmatter, definitions = parse_testmd(
+            test_file.read_text(), source_file=test_file
+        )
+    except ValueError as e:
+        raise click.ClickException(str(e)) from None
 
     # Handle includes (one level — nested includes are an error)
     for inc in frontmatter.get("include", []):
         inc_file = (test_file.parent / inc).resolve()
         if not inc_file.exists():
             raise click.ClickException(f"Included file not found: {inc}")
-        inc_fm, inc_defs = parse_testmd(inc_file.read_text(), source_file=inc_file)
+        try:
+            inc_fm, inc_defs = parse_testmd(inc_file.read_text(), source_file=inc_file)
+        except ValueError as e:
+            raise click.ClickException(str(e)) from None
         if inc_fm.get("include"):
             raise click.ClickException(
                 f"Nested includes are not supported: {inc} includes {inc_fm['include']}"

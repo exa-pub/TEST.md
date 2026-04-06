@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Stage 1: tests ──────────────────────────────────────────────
+  test-py:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[test]'
+      - run: python -m pytest tests/ -v
+
+  test-go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test ./internal/... -v
+
+  # ── Stage 2: build Go binaries ──────────────────────────────────
+  build-go:
+    needs: [test-py, test-go]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: |
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -ldflags="-s -w" -o testmd-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/testmd/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: testmd-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: testmd-${{ matrix.goos }}-${{ matrix.goarch }}
+
+  # ── Stage 3: testmd ci ──────────────────────────────────────────
+  testmd-ci-py:
+    needs: [test-py, test-go]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - run: testmd ci
+
+  testmd-ci-go:
+    needs: build-go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: testmd-linux-amd64
+      - run: chmod +x testmd-linux-amd64
+      - run: ./testmd-linux-amd64 ci
+
+  # ── Stage 4: Docker ─────────────────────────────────────────────
+  docker:
+    needs: [testmd-ci-py, testmd-ci-go]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: testmd-linux-amd64
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: BINARY=testmd-linux-amd64
+          push: false
+          tags: testmd:latest

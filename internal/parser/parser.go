@@ -10,10 +10,7 @@ import (
 	"github.com/testmd/testmd/internal/models"
 )
 
-var (
-	stateBlockRE = regexp.MustCompile(`(?s)<!-- State\n` + "```testmd\n" + `.*?` + "```\n" + `-->` + "\n?")
-	yamlBlockRE  = regexp.MustCompile("(?s)```ya?ml\n(.*?)```")
-)
+var yamlBlockRE = regexp.MustCompile("(?s)```ya?ml\n(.*?)```")
 
 // Frontmatter holds parsed frontmatter fields.
 type Frontmatter struct {
@@ -38,10 +35,7 @@ func Parse(text, sourceFile string) (Frontmatter, []models.TestDefinition, error
 		}
 	}
 
-	// 2. Strip state block
-	text = stateBlockRE.ReplaceAllString(text, "")
-
-	// 3. Parse tests
+	// 2. Parse tests
 	lines := strings.Split(text, "\n")
 	var tests []models.TestDefinition
 	i := 0

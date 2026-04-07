@@ -38,9 +38,9 @@ func BuildInstances(root string, defs []models.TestDefinition, ig *ignore.GitIgn
 			labelCombos = patterns.EnumerateLabels(root, onChange, ig)
 		}
 
-		// Self-exclusion: exclude the source TEST.md from its own hash.
-		selfRel, _ := filepath.Rel(root, defn.SourceFile)
-		selfRel = filepath.ToSlash(selfRel)
+		// Exclude the lock file from hashing — it changes on every resolve.
+		lockRel, _ := filepath.Rel(root, defn.SourceFile+".lock")
+		lockRel = filepath.ToSlash(lockRel)
 
 		for _, labels := range labelCombos {
 			var resolvedPatterns []string
@@ -62,7 +62,7 @@ func BuildInstances(root string, defs []models.TestDefinition, ig *ignore.GitIgn
 				}
 			}
 
-			delete(allFiles, selfRel)
+			delete(allFiles, lockRel)
 
 			matched := make([]string, 0, len(allFiles))
 			for f := range allFiles {

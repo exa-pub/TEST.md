@@ -12,7 +12,7 @@ TEST.md ──► parse ──► TestDefinition[] ──► expand labels ─�
                                                               ┌─────┘
                                                               ▼
                                           state.json ◄──► compute statuses
-                                         (in TEST.md)         │
+                                        (TEST.md.lock)        │
                                                               ▼
                                                          CLI output
 ```
@@ -26,11 +26,10 @@ TEST.md ──► parse ──► TestDefinition[] ──► expand labels ─�
 
 Responsibilities:
 1. Extract frontmatter (`---` delimited YAML at file start)
-2. Strip the state block (`<!-- State ... -->`) before parsing tests
-3. Split by `# ` headings (h1 only)
-4. For each heading: extract the first ` ```yaml ` block as config, everything else as description
-5. Validate: yaml block required, `on_change` required
-6. Track source line numbers (accounting for frontmatter offset)
+2. Split by `# ` headings (h1 only)
+3. For each heading: extract the first ` ```yaml ` block as config, everything else as description
+4. Validate: yaml block required, `on_change` required
+5. Track source line numbers (accounting for frontmatter offset)
 
 The parser does NOT handle includes or state loading — those are the caller's responsibility.
 
@@ -74,11 +73,10 @@ Computes content hashes for change detection:
 
 ### State manager
 
-**Read:** find `<!-- State\n```testmd\n...\n```\n-->` block, parse JSON.
-**Write:** serialize JSON (formatted, indent=2), replace existing block or append.
-**Strip:** remove the block entirely (when a file has no tests with state).
+**Read:** read `TEST.md.lock`, parse JSON. Missing file → empty state.
+**Write:** serialize JSON (formatted, indent=2), write to `TEST.md.lock`. Empty state → delete file.
 
-State is per-file. When includes are used, each file manages its own state independently.
+State is per-file. When includes are used, each file has its own lock file.
 
 ### Resolver
 
@@ -105,14 +103,14 @@ Label substitution: `$var` in titles and descriptions is replaced with actual va
 
 ## Key invariants
 
-1. **State is always in TEST.md** — no external files or directories
+1. **State is always in TEST.md.lock** — never inline in TEST.md
 2. **Hashing is deterministic** — same files with same content always produce the same hash
 3. **Labels are sorted** — in IDs, state records, and display, labels are always sorted by key
 4. **Files are sorted** — file lists are always sorted alphabetically before hashing
-5. **State block is stripped before parsing** — the state block never appears in test descriptions
+5. **Lock file is excluded from hashing** — the lock file changes on every resolve and must not affect content hash
 6. **Ignorefile applies to both discovery and matching** — an ignored path never produces a label or contributes to a hash
 7. **Include is one level** — included files cannot include other files
-8. **State is per-file** — each TEST.md stores state only for tests defined in it
+8. **State is per-file** — each TEST.md has its own lock file storing state for its tests
 9. **ID is deterministic** — same title + same labels always produce the same ID
 
 ## Module boundaries

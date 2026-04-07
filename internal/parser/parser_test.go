@@ -141,36 +141,6 @@ func TestFrontmatter_SourceLineWithFrontmatter(t *testing.T) {
 	}
 }
 
-func TestStateBlockStripped_NotInDescription(t *testing.T) {
-	stateBlock := "<!-- State\n```testmd\n{\"version\":1,\"tests\":{}}\n```\n-->\n"
-	text := makeTest("My Test", "src/**/*") + "\n" + stateBlock
-	_, tests, err := Parse(text, "TEST.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(tests) != 1 {
-		t.Fatalf("expected 1 test, got %d", len(tests))
-	}
-	if strings.Contains(tests[0].Description, "State") {
-		t.Errorf("description should not contain 'State'")
-	}
-	if strings.Contains(tests[0].Description, "testmd") {
-		t.Errorf("description should not contain 'testmd'")
-	}
-}
-
-func TestStateBlockStripped_DoesNotCreateExtraTest(t *testing.T) {
-	stateBlock := "<!-- State\n```testmd\n{\"version\":1,\"tests\":{}}\n```\n-->\n"
-	text := makeTest("My Test", "src/**/*") + "\n" + stateBlock
-	_, tests, err := Parse(text, "TEST.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(tests) != 1 {
-		t.Fatalf("expected 1 test, got %d", len(tests))
-	}
-}
-
 func TestErrors_MissingYamlBlock(t *testing.T) {
 	text := "# T\n\nNo yaml here.\n"
 	_, _, err := Parse(text, "TEST.md")

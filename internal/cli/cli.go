@@ -342,7 +342,7 @@ func load(testmdPath string) (*context, error) {
 		return nil, err
 	}
 
-	// Load and merge state from all source files
+	// Load and merge state from all source lock files
 	sourceFiles := map[string]bool{testFile: true}
 	for _, d := range defs {
 		sourceFiles[d.SourceFile] = true
@@ -350,7 +350,7 @@ func load(testmdPath string) (*context, error) {
 
 	st := &models.State{Version: 1, Tests: map[string]*models.TestRecord{}}
 	for sf := range sourceFiles {
-		fileSt, err := state.Load(sf)
+		fileSt, err := state.Load(lockPath(sf))
 		if err != nil {
 			return nil, err
 		}
@@ -387,17 +387,15 @@ func save(ctx *context) error {
 				fileSt.Tests[id] = rec
 			}
 		}
-		if len(fileSt.Tests) > 0 {
-			if err := state.Save(sf, fileSt); err != nil {
-				return err
-			}
-		} else {
-			if err := state.StripBlock(sf); err != nil {
-				return err
-			}
+		if err := state.Save(lockPath(sf), fileSt); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func lockPath(testFile string) string {
+	return testFile + ".lock"
 }
 
 func labelSuffix(labels map[string]string) string {

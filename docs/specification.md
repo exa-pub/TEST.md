@@ -13,11 +13,12 @@ This is especially valuable when code is written by AI agents, which have no way
 
 ## TEST.md format
 
-A TEST.md file has three optional sections, in order:
+A TEST.md file has two optional sections, in order:
 
 1. **Frontmatter** — YAML between `---` delimiters at the very beginning
 2. **Test definitions** — sections starting with `# Title`
-3. **State block** — auto-managed, at the end of the file
+
+State is stored separately in `TEST.md.lock` (see [State file](#state-file)).
 
 ### Frontmatter
 
@@ -64,13 +65,11 @@ Verify that OAuth works for each provider:
 | `id`        | string         | no       | —       | Explicit first part of the test id            |
 | `matrix`    | list           | no       | —       | Label combinations (see [Matrix](#matrix))    |
 
-### State block
+### State file
 
-State is stored as a fenced code block at the end of the file, wrapped in an HTML comment:
+State is stored in a separate lock file alongside TEST.md. For `TEST.md`, state is in `TEST.md.lock`. The lock file contains plain JSON (no markdown wrapping):
 
-```markdown
-<!-- State
-```testmd
+```json
 {
   "version": 1,
   "tests": {
@@ -89,16 +88,14 @@ State is stored as a fenced code block at the end of the file, wrapped in an HTM
   }
 }
 ```
--->
-```
 
-The HTML comment makes the block invisible in markdown renderers. The `testmd` language tag on the code fence allows the tool to find and replace the block. The JSON is formatted with indent for readable diffs.
+The JSON is formatted with 2-space indent for readable diffs.
 
 Implementations MUST:
-- Strip the state block before parsing test definitions
-- Replace the existing block (or append if absent) when saving state
-- Use the `<!-- State\n```testmd\n...\n```\n-->` format exactly
-- Never include the state block in test descriptions
+- Read state from `<testmd-path>.lock`
+- Write state to `<testmd-path>.lock`
+- Delete the lock file when state is empty
+- Never modify TEST.md when saving state
 
 ---
 
@@ -247,7 +244,7 @@ Resolution order: exact → first-part → prefix.
 For each test instance:
 
 1. Expand `on_change` patterns into a file list (with label substitution)
-2. Exclude the source TEST.md file itself (it contains the state block, which changes on every resolve)
+2. Exclude the source lock file (`TEST.md.lock`) — it changes on every resolve
 3. Sort files alphabetically
 4. For each file: `sha256(relative_path + "\0" + file_content)`
 5. Content hash: `sha256(concat(all_file_hashes))`
@@ -298,15 +295,15 @@ For directory entries, the path is checked with a trailing `/` to match gitignor
 
 ### Location
 
-State is stored inline in each TEST.md file as described in the [State block](#state-block) section. There is no external state directory.
+State is stored in a lock file alongside each TEST.md, as described in the [State file](#state-file) section. `TEST.md` → `TEST.md.lock`.
 
 ### Per-file state with includes
 
-When using `include`, each TEST.md file stores state for its own tests only. The root file does not aggregate state from included files. When saving:
+When using `include`, each TEST.md file has its own lock file storing state for its own tests only. The root file does not aggregate state from included files. When saving:
 
 1. Group test instances by their source file
-2. Write each file's state block with only its tests
-3. If a file has no tests with state, remove the state block
+2. Write each file's lock file with only its tests
+3. If a file has no tests with state, delete the lock file
 
 ### State record fields
 

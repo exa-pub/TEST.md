@@ -17,8 +17,8 @@ The canonical specification is in `docs/specification.md`. The architecture is d
 
 ## Architecture rules
 
-- State is always stored inline in TEST.md (no external directories)
-- The state block format is `<!-- State\n```testmd\n{json}\n```\n-->`
+- State is always stored in TEST.md.lock (never inline in TEST.md)
+- The lock file format is plain JSON with indent=2
 - Hashing must be deterministic: same files + same content = same hash
 - Labels and files are always sorted before hashing or display
 - Ignorefile defaults to `.gitignore`, parsed as gitignore format

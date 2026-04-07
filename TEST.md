@@ -28,3 +28,20 @@ Read through each doc and verify:
 3. No references to removed features or old behavior
 4. Architecture doc matches actual module structure
 
+# Agent skill is up to date
+
+```yaml
+watch:
+  - ./skills/testmd/SKILL.md
+  - ./docs/specification.md
+  - ./docs/cli.md
+  - ./internal/cli/cli.go
+```
+
+The agent skill (`skills/testmd/SKILL.md`) must accurately describe the current CLI:
+1. All commands and flags match the implementation
+2. ID format matches specification (18 hex, no dashes, prefix matching)
+3. State file format and location are correct (.testmd.lock, YAML)
+4. Project configuration described correctly (.testmd.yaml, no frontmatter)
+5. No references to removed features (include, per-file lock files, JSON state, --testmd flag)
+

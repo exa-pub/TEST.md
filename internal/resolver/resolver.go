@@ -120,6 +120,11 @@ func FailTest(st *models.State, inst *models.TestInstance, message string, root 
 	st.Tests[inst.ID].Message = &message
 }
 
+// ResetTest removes the state record for a test, returning it to pending.
+func ResetTest(st *models.State, inst *models.TestInstance) {
+	delete(st.Tests, inst.ID)
+}
+
 // GCState removes orphaned test records. Returns the count removed.
 func GCState(st *models.State, instances []*models.TestInstance) int {
 	currentIDs := map[string]bool{}

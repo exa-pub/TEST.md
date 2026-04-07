@@ -34,6 +34,7 @@ testmd [--root PATH] init
 testmd [--root PATH] status [--report-md F] [--report-json F]
 testmd [--root PATH] resolve <id>
 testmd [--root PATH] fail <id> <message>
+testmd [--root PATH] reset <id>
 testmd [--root PATH] get <id>
 testmd [--root PATH] gc
 testmd [--root PATH] ci [--report-md F] [--report-json F]

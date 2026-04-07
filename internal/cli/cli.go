@@ -41,6 +41,7 @@ func Run() {
 		statusCmd(&rootFlag),
 		resolveCmd(&rootFlag),
 		failCmd(&rootFlag),
+		resetCmd(&rootFlag),
 		getCmd(&rootFlag),
 		gcCmd(&rootFlag),
 		ciCmd(&rootFlag),
@@ -153,6 +154,43 @@ func failCmd(rootFlag *string) *cobra.Command {
 				suffix := labelSuffix(inst.Labels)
 				fmt.Printf("Failed: %s%s\n", inst.Definition.Title, suffix)
 				fmt.Printf("  Message: %s\n", args[1])
+			}
+			return state.Save(lk, ctx.state)
+		},
+	}
+}
+
+func resetCmd(rootFlag *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "reset <id>",
+		Short: "Reset test(s) to pending (remove stored state)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, err := load(*rootFlag)
+			if err != nil {
+				return err
+			}
+			matches := resolver.FindInstances(ctx.instances, args[0])
+			if len(matches) == 0 {
+				return fmt.Errorf("no test matching '%s'", args[0])
+			}
+
+			lk := lockPath(ctx.root)
+			f, err := state.Lock(lk)
+			if err != nil {
+				return fmt.Errorf("lock: %w", err)
+			}
+			defer state.Unlock(f)
+
+			ctx.state, err = state.Load(lk)
+			if err != nil {
+				return err
+			}
+
+			for _, inst := range matches {
+				resolver.ResetTest(ctx.state, inst)
+				suffix := labelSuffix(inst.Labels)
+				fmt.Printf("Reset: %s%s\n", inst.Definition.Title, suffix)
 			}
 			return state.Save(lk, ctx.state)
 		},

@@ -8,16 +8,6 @@ on:
 
 jobs:
   # ── Stage 1: tests ──────────────────────────────────────────────
-  test-py:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install -e '.[test]'
-      - run: python -m pytest tests/ -v
-
   test-go:
     runs-on: ubuntu-latest
     steps:
@@ -29,7 +19,7 @@ jobs:
 
   # ── Stage 2: build Go binaries ──────────────────────────────────
   build-go:
-    needs: [test-py, test-go]
+    needs: [test-go]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -57,17 +47,6 @@ jobs:
           path: testmd-${{ matrix.goos }}-${{ matrix.goarch }}
 
   # ── Stage 3: testmd ci ──────────────────────────────────────────
-  testmd-ci-py:
-    needs: [test-py, test-go]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install -e .
-      - run: testmd ci
-
   testmd-ci-go:
     needs: build-go
     runs-on: ubuntu-latest
@@ -81,7 +60,7 @@ jobs:
 
   # ── Stage 4: Docker ─────────────────────────────────────────────
   docker:
-    needs: [testmd-ci-py, testmd-ci-go]
+    needs: [testmd-ci-go]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

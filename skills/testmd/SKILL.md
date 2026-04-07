@@ -248,11 +248,11 @@ A complete TEST.md showing multiple features together:
 
 ````markdown
 ---
-include: [src/testmd/TEST.md]
+include: [components/TEST.md]
 ignorefile: .gitignore
 ---
 
-# Go implementation matches Python
+# Go implementation works correctly
 
 ```yaml
 on_change:
@@ -260,10 +260,10 @@ on_change:
   - ./cmd/**
 ```
 
-Go code changed — verify it still matches the Python reference:
-1. Run both implementations on the same TEST.md
-2. Compare report JSON output
-3. Go tests pass: `go test ./internal/...`
+Go code changed — verify it works correctly:
+1. Go tests pass: `go test ./internal/...`
+2. Build succeeds: `go build -o ./testmd-go ./cmd/testmd/`
+3. Run `./testmd-go status` on a sample TEST.md and verify output
 
 # Deploy smoke test for $service
 

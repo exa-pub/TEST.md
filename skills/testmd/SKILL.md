@@ -43,8 +43,8 @@ IDs support abbreviations: full `aabbcc-ddeeff`, first-part `aabbcc`, or unambig
 
 ### Use `testmd get`, not file reading
 
-TEST.md files can be very large and contain embedded state blocks with hashes. **Always use `testmd get <id>` to read test details** instead of reading TEST.md directly. The `get` command:
-- Substitutes label variables (`$var`) with actual values in titles and descriptions
+TEST.md files can be very large. **Always use `testmd get <id>` to read test details** instead of reading TEST.md directly. The `get` command:
+- Substitutes label variables (`{var}`) with actual values in titles and descriptions
 - Shows only the relevant test, not the entire file
 - Includes current status, watched files, and labels
 - Is far more efficient than parsing markdown yourself
@@ -66,9 +66,9 @@ Only run `testmd resolve <id>` after you have actually verified that the test pa
 | `failed` | Verified and failing | Fix the issue, then resolve |
 | `outdated` | Was resolved/failed, but watched files changed | Re-verify and resolve/fail |
 
-### State lives in TEST.md
+### State lives in TEST.md.lock
 
-All state is stored inline in TEST.md files as HTML comments (invisible in rendered markdown). There are no external state files. Don't modify state blocks manually — always use `testmd resolve` / `testmd fail`.
+All state is stored in `TEST.md.lock` files (JSON, one per TEST.md). Don't modify lock files manually — always use `testmd resolve` / `testmd fail`.
 
 ### When you change code
 
@@ -82,11 +82,12 @@ This is especially important before committing or opening a PR — `testmd ci` w
 
 ## TEST.md file structure
 
-A TEST.md file has three optional sections, in order:
+A TEST.md file has two optional sections, in order:
 
 1. **Frontmatter** — YAML between `---` delimiters at the very beginning
 2. **Test definitions** — sections starting with `# Title`
-3. **State block** — auto-managed by testmd, at the end of the file (do not edit manually)
+
+State is stored separately in `TEST.md.lock`.
 
 ### Frontmatter
 
@@ -112,7 +113,7 @@ Each test is an h1 heading + a YAML config block + a free-form description:
 # API returns valid JSON
 
 ```yaml
-on_change: ./src/api/**
+watch: ./src/api/**
 ```
 
 Send GET /users and verify response is valid JSON with correct schema.
@@ -122,107 +123,61 @@ Config fields:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `on_change` | string or list | **yes** | Glob pattern(s) for watched files |
+| `watch` | string or list | **yes** | Glob pattern(s) for watched files |
 | `id` | string | no | Explicit stable id (so renaming the title doesn't change the id) |
-| `matrix` | list | no | Label combinations (see below) |
+| `each` | object | no | Variable sources, cartesian product |
+| `combinations` | list | no | Variable sources, union of entries |
 
-### Patterns in `on_change`
+### Watch patterns
 
 ```yaml
-on_change: ./src/auth/**          # recursive glob
-on_change: ./config/*.yaml        # single-level wildcard
-on_change:                        # multiple patterns
+watch: ./src/auth/**          # recursive glob
+watch: ./config/*.yaml        # single-level wildcard
+watch:                        # multiple patterns
   - ./src/api/**
   - ./schema/openapi.yaml
-on_change: ./services/$name/**    # label variable — auto-discovers from filesystem
+watch: ./services/{name}/**   # variable substitution
 ```
 
-Special segments:
-- `$identifier` — label variable, each unique directory at that position produces a test instance
-- `*` — matches any name at one path level
-- `**` — matches any sub-path, zero or more levels
+Variables use `{name}` syntax — substituted before globbing.
 
-### Labels: auto-discovery from filesystem
+### Variables: `each` (cartesian product)
 
-When a pattern contains `$var` and no `matrix` is specified, testmd discovers values from the filesystem:
+`each` defines variable sources. All are expanded as a cartesian product.
 
 ````markdown
-# $service healthcheck
+# {service} healthcheck
 
 ```yaml
-on_change: ./services/$service/**
+each:
+  service: ./services/*/
+watch: ./services/{service}/**
 ```
 
-Verify `$service` responds to GET /health with 200.
+Verify `{service}` responds to GET /health with 200.
 ````
 
-With filesystem `services/{auth,billing,gateway}/`, this creates three test instances:
-```
-$ testmd status
-$service healthcheck
-  … ed4be2-fe0c31  service=auth     pending
-  … ed4be2-c9054d  service=billing  pending
-  … ed4be2-ab1234  service=gateway  pending
-```
+Source types:
+- `./path/*/` — directory names (trailing `/` = dirs only)
+- `./path/*.ext` — file names without extension
+- `[a, b, c]` — explicit list
 
-Adding a new directory (e.g. `services/payments/`) automatically creates a new pending test.
+With filesystem `services/{auth,billing,gateway}/`, this creates three test instances.
 
-### Labels: explicit matrix
+### Variables: `combinations` (union)
 
-Matrix decouples label generation from file structure. Useful for fixed combinations (environments, versions) or mixing auto-discovery with explicit values.
-
-**Const — explicit values (cartesian product):**
-
-````markdown
-# API compatibility
+When cartesian product is not appropriate:
 
 ```yaml
-on_change: ./api/**
-matrix:
-  - const:
-      version: [v1, v2, v3]
+combinations:
+  - db: [postgres, mysql]
+    suite: [full]
+  - db: [sqlite]
+    suite: [basic]
+watch: ./migrations/{db}/**
 ```
 
-Verify the API contract for version `$version`.
-````
-
-**Match — discover from filesystem:**
-
-```yaml
-matrix:
-  - match:
-      - ./services/$name/
-```
-
-**Match + const — cartesian product of discovered and explicit:**
-
-````markdown
-# Deploy smoke test
-
-```yaml
-on_change:
-  - ./services/$service/**
-  - ./deploy/$env.yaml
-matrix:
-  - match:
-      - ./services/$service/
-    const:
-      env: [prod, staging]
-```
-
-After deploying `$service` to `$env`:
-1. Verify the service starts
-2. Check /health returns 200
-````
-
-**Multiple entries — union (not cartesian):**
-
-```yaml
-matrix:
-  - const: {db: [postgres, mysql]}
-  - const: {db: [sqlite]}
-# produces: db=postgres, db=mysql, db=sqlite
-```
+Each entry is a cartesian product internally; entries are combined via union.
 
 ### Includes: splitting tests across files
 
@@ -234,7 +189,7 @@ include: [tests/integration/TEST.md, tests/e2e/TEST.md]
 # Unit test sanity
 
 ```yaml
-on_change: ./src/**
+watch: ./src/**
 ```
 
 Run `make test` and verify all unit tests pass.
@@ -255,30 +210,28 @@ ignorefile: .gitignore
 # Go implementation works correctly
 
 ```yaml
-on_change:
+watch:
   - ./internal/**
   - ./cmd/**
 ```
 
 Go code changed — verify it works correctly:
 1. Go tests pass: `go test ./internal/...`
-2. Build succeeds: `go build -o ./testmd-go ./cmd/testmd/`
+2. Build succeeds: `go build -o ./bin/ ./cmd/...`
 3. Run `./testmd-go status` on a sample TEST.md and verify output
 
-# Deploy smoke test for $service
+# Deploy smoke test for {service}
 
 ```yaml
-on_change:
-  - ./services/$service/**
-  - ./deploy/$env.yaml
-matrix:
-  - match:
-      - ./services/$service/
-    const:
-      env: [prod, staging]
+each:
+  service: ./services/*/
+  env: [prod, staging]
+watch:
+  - ./services/{service}/**
+  - ./deploy/{env}.yaml
 ```
 
-After deploying `$service` to `$env`:
+After deploying `{service}` to `{env}`:
 1. Verify the service starts
 2. Check /health returns 200
 3. Run basic smoke test

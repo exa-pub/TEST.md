@@ -37,6 +37,6 @@ testmd [--testmd PATH] ci [--report-md F] [--report-json F]
 ## Running tests
 
 ```
-go build -o ./testmd-go ./cmd/testmd/
+go build -o ./bin/ ./cmd/...
 go test ./internal/...
 ```

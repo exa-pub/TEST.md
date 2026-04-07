@@ -276,7 +276,7 @@ func countStatuses(results []models.StatusResult) map[string]int {
 
 func substituteLabels(text string, labels map[string]string) string {
 	for k, v := range labels {
-		text = strings.ReplaceAll(text, "$"+k, v)
+		text = strings.ReplaceAll(text, "{"+k+"}", v)
 	}
 	return text
 }

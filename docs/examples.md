@@ -6,7 +6,7 @@
 # Login page renders
 
 ```yaml
-on_change: ./src/auth/**
+watch: ./src/auth/**
 ```
 
 1. Open /login
@@ -27,16 +27,18 @@ Login page renders
   ✓ a1b2c3-e3b0c4  resolved  (5s ago)
 ```
 
-## Labels from filesystem
+## Labels from filesystem (each with glob)
 
 ```markdown
-# $service healthcheck
+# {service} healthcheck
 
 ```yaml
-on_change: ./services/$service/**
+each:
+  service: ./services/*/
+watch: ./services/{service}/**
 ```
 
-Verify `$service` responds to GET /health with 200.
+Verify `{service}` responds to GET /health with 200.
 ```
 
 With filesystem:
@@ -52,32 +54,31 @@ services/
 
 ```
 $ testmd status
-$service healthcheck
+{service} healthcheck
   … ed4be2-fe0c31  service=auth     pending
   … ed4be2-c9054d  service=billing  pending
   … ed4be2-ab1234  service=gateway  pending
 
 $ testmd resolve ed4be2
-Resolved: $service healthcheck (service=auth)
-Resolved: $service healthcheck (service=billing)
-Resolved: $service healthcheck (service=gateway)
+Resolved: auth healthcheck (service=auth)
+Resolved: billing healthcheck (service=billing)
+Resolved: gateway healthcheck (service=gateway)
 ```
 
 Adding a new service (`services/payments/`) automatically creates a new pending test instance.
 
-## Matrix: const values
+## Each with explicit values
 
 ```markdown
 # API compatibility
 
 ```yaml
-on_change: ./api/**
-matrix:
-  - const:
-      version: [v1, v2, v3]
+each:
+  version: [v1, v2, v3]
+watch: ./api/**
 ```
 
-Verify the API contract for version `$version`.
+Verify the API contract for version `{version}`.
 ```
 
 ```
@@ -88,62 +89,60 @@ API compatibility
   … abc123-333333  version=v3  pending
 ```
 
-## Matrix: match + const
+## Each with glob + explicit (cartesian product)
 
 ```markdown
 # Deploy smoke test
 
 ```yaml
-on_change:
-  - ./services/$service/**
-  - ./deploy/$env.yaml
-matrix:
-  - match:
-      - ./services/$service/
-    const:
-      env: [prod, staging]
+each:
+  service: ./services/*/
+  env: [prod, staging]
+watch:
+  - ./services/{service}/**
+  - ./deploy/{env}.yaml
 ```
 
-After deploying `$service` to `$env`:
+After deploying `{service}` to `{env}`:
 1. Verify the service starts
 2. Check /health returns 200
 3. Run basic smoke test
 ```
 
-## Matrix: union for irregular combinations
+## Combinations for irregular sets
 
 ```markdown
 # Database migrations
 
 ```yaml
-on_change: ./migrations/$db/**
-matrix:
-  - const:
-      db: [postgres, mysql]
-  - const:
-      db: [sqlite]
+combinations:
+  - db: [postgres, mysql]
+    suite: [full]
+  - db: [sqlite]
+    suite: [basic]
+watch: ./migrations/{db}/**
 ```
 
-Run `migrate up` and `migrate down` for `$db`.
-
-Note: sqlite only needs basic tests, while postgres and mysql need full tests.
+Run `{suite}` migration tests for `{db}`.
 ```
 
-## Multiple on_change patterns
+## Multiple watch patterns
 
 ```markdown
 # Config validation
 
 ```yaml
-on_change:
-  - ./config/$env.yaml
+each:
+  env: ./config/*/
+watch:
+  - ./config/{env}/**
   - ./schema/config.json
 ```
 
-Verify that `$env` config validates against the JSON schema.
+Verify that `{env}` config validates against the JSON schema.
 ```
 
-Changes to any `config/*.yaml` OR `schema/config.json` will mark the test as outdated.
+Changes to any config directory OR `schema/config.json` will mark the test as outdated.
 
 ## Include files
 
@@ -156,7 +155,7 @@ include: [tests/integration/TEST.md, tests/e2e/TEST.md]
 # Unit test sanity
 
 ```yaml
-on_change: ./src/**
+watch: ./src/**
 ```
 
 Run `make test` and verify all unit tests pass.
@@ -167,7 +166,7 @@ Run `make test` and verify all unit tests pass.
 # Integration: database
 
 ```yaml
-on_change: ./src/db/**
+watch: ./src/db/**
 ```
 
 Run integration tests against a real database.
@@ -182,7 +181,7 @@ Integration: database
   … bbb222-e3b0c4  pending
 ```
 
-Each file stores its own state. Resolving "Integration: database" writes state to `tests/integration/TEST.md`, not to the root.
+Each file stores its own state in its own lock file. Resolving "Integration: database" writes state to `tests/integration/TEST.md.lock`, not to the root.
 
 ## Custom ignorefile
 
@@ -224,8 +223,8 @@ test:manual:
 # OAuth flow
 
 ```yaml
-id: oauth 
-on_change: ./services/auth/**
+id: oauth
+watch: ./services/auth/**
 ```
 
 This test has a stable id `oauth-e3b0c4` that won't change if the title is renamed.

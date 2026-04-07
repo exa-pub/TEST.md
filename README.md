@@ -18,7 +18,7 @@ This is especially useful when AI agents write code — they don't know your pro
 # Login page
 
 ```yaml
-on_change: ./src/auth/**
+watch: ./src/auth/**
 ```
 
 1. Open /login
@@ -42,9 +42,9 @@ OK: all tests resolved
 ## Features
 
 - **File watching via hashing** — detects changes without git dependency
-- **Label variables** — `./services/$name/**` auto-discovers test instances from filesystem structure
-- **Matrix** — explicit label combinations with `const` and `match`
-- **Inline state** — test state stored directly in TEST.md, no extra files
+- **Variables** — `each: {service: ./services/*/}` discovers test instances from filesystem
+- **Combinations** — explicit or mixed label sets for irregular test matrices
+- **Lock file state** — test state stored in `TEST.md.lock`, keeping TEST.md clean
 - **Includes** — split tests across multiple files
 - **Ignorefile** — respects `.gitignore` by default
 - **CI mode** — `testmd ci` exits 1 if tests need attention
@@ -82,7 +82,7 @@ Create a `TEST.md`:
 # API returns valid JSON
 
 ```yaml
-on_change: ./src/api/**
+watch: ./src/api/**
 ```
 
 Send GET /users and verify response is valid JSON with correct schema.

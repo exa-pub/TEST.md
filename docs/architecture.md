@@ -37,27 +37,29 @@ The parser does NOT handle includes or state loading — those are the caller's 
 
 Two responsibilities:
 
-**1. Label enumeration** — discover `$var` values from the filesystem.
+**1. Variable discovery** — resolve `each` / `combinations` sources to value lists.
 
-Algorithm for a single pattern:
+For glob sources (e.g. `./services/*/`):
 ```
-split pattern into path segments
-walk segments left-to-right:
-  $var  → enumerate directory entries at this position (skip dotfiles, ignored)
-  */?   → stop (rest is glob territory)
-  other → descend into literal directory
+run standard glob (doublestar)
+if trailing / → filter to directories only
+extract basename of each match
+if glob has explicit extension (*.yaml) → strip extension
+filter: skip hidden files, skip ignorefile matches
+sort and deduplicate
 ```
 
-For multiple patterns: union of discovered combinations.
-For matrix: expand const (cartesian product) × match (filesystem discovery), then union across entries.
+For explicit sources (e.g. `[prod, staging]`): use values as-is.
 
-**2. File resolution** — substitute labels into patterns and glob for files.
+For `each`: cartesian product of all resolved sources.
+For `combinations`: union across entries, cartesian within each entry.
+
+**2. File resolution** — substitute `{var}` into watch patterns and glob for files.
 
 Algorithm:
 ```
-replace $var with label values
+replace {var} with label values
 strip leading ./
-normalize trailing /** to /**/*  (pathlib compatibility)
 glob from root directory
 filter: only files, exclude ignored
 sort alphabetically
@@ -119,7 +121,7 @@ Label substitution: `$var` in titles and descriptions is replaced with actual va
 |-----------|------------------|-------------------------------------|
 | models    | —                | Data structures                     |
 | parser    | models           | TEST.md → definitions               |
-| patterns  | (filesystem)     | Label discovery, file globbing      |
+| patterns  | models,(filesystem) | Variable discovery, file globbing  |
 | hashing   | (filesystem)     | SHA256, ID generation               |
 | state     | (filesystem)     | Read/write state in TEST.md         |
 | resolver  | patterns,hashing | Build instances, compute statuses   |

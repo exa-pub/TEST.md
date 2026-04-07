@@ -1,20 +1,20 @@
 # Go implementation works correctly
 
 ```yaml
-on_change:
+watch:
   - ./internal/**
   - ./cmd/**
 ```
 
 Go code changed — verify it works correctly:
 1. Go tests pass: `go test ./internal/...`
-2. Build succeeds: `go build -o ./testmd-go ./cmd/testmd/`
+2. Build succeeds: `go build -o ./bin/ ./cmd/...`
 3. Run `./testmd-go status` on a sample TEST.md and verify output is correct
 
 # Documentation is accurate
 
 ```yaml
-on_change:
+watch:
   - ./docs/specification.md
   - ./docs/cli.md
   - ./docs/examples.md

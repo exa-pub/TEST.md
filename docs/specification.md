@@ -39,31 +39,34 @@ ignorefile: .gitignore
 Each test starts with a level-1 heading (`# Title`) followed by a YAML config block and a description:
 
 ```markdown
-# OAuth login flow
+# OAuth login flow on {env}
 
 ```yaml
 id: oauth
-on_change: ./services/$provider/**
-matrix:
-  - match:
-      - ./services/$provider/
-    const:
-      env: [prod, staging]
+each:
+  provider: ./services/*/
+  env: [prod, staging]
+watch:
+  - ./services/{provider}/**
+  - ./deploy/{env}.yaml
 ```
 
 Verify that OAuth works for each provider:
 1. Navigate to /login
-2. Click "Sign in with $provider"
+2. Click "Sign in with {provider}"
 3. Verify redirect and session creation
 ```
 
 ### Test config fields
 
-| Field       | Type           | Required | Default | Description                                   |
-|-------------|----------------|----------|---------|-----------------------------------------------|
-| `on_change` | string or list | **yes**  | —       | Glob pattern(s) for watched files             |
-| `id`        | string         | no       | —       | Explicit first part of the test id            |
-| `matrix`    | list           | no       | —       | Label combinations (see [Matrix](#matrix))    |
+| Field          | Type           | Required | Default | Description                                         |
+|----------------|----------------|----------|---------|-----------------------------------------------------|
+| `watch`        | string or list | **yes**  | —       | Glob pattern(s) for watched files                   |
+| `id`           | string         | no       | —       | Explicit first part of the test id                  |
+| `each`         | object         | no       | —       | Variable sources for cartesian product (see [Each](#each)) |
+| `combinations` | list           | no       | —       | Variable sources for union of entries (see [Combinations](#combinations)) |
+
+`each` and `combinations` are mutually exclusive — using both is an error.
 
 ### State file
 
@@ -99,119 +102,81 @@ Implementations MUST:
 
 ---
 
-## Patterns
+## Watch patterns
 
-The `on_change` field uses glob patterns with label variables:
+The `watch` field uses glob patterns with variable substitution:
 
 ```
-./path/to/file.go          — exact file
-./*.go                     — single-level wildcard
-./services/$name/**        — label variable + recursive glob
-./services/$name/api/*.go  — mixed
+./path/to/file.go            — exact file
+./*.go                       — single-level wildcard
+./services/{name}/**         — variable substitution + recursive glob
+./services/{name}/api/*.go   — mixed
 ```
+
+Variables use `{name}` syntax. Before globbing, `{var}` placeholders are replaced with the actual label values from `each` or `combinations`.
 
 ### Special segments
 
-| Segment       | Meaning                                                       |
-|---------------|---------------------------------------------------------------|
-| `$identifier` | Label variable. Each unique value produces a test instance.   |
-| `*`           | Any name at one path level (standard glob)                    |
-| `**`          | Any sub-path, zero or more levels (standard glob)             |
-
-### Label discovery (auto mode)
-
-When `matrix` is **not** specified, `$var` segments in `on_change` are discovered from the filesystem:
-
-1. Walk the pattern segments left-to-right
-2. When a `$var` segment is reached, enumerate directory entries at that position
-3. Skip entries starting with `.` (dotfiles)
-4. Skip entries matching the ignorefile
-5. When a glob wildcard (`*`, `**`, `?`) is reached, stop walking — the rest is handled by glob
-6. Each unique value of `$var` produces a separate test instance
-
-Example: pattern `./services/$name/**` with filesystem `services/{auth,billing}/` produces two instances with labels `name=auth` and `name=billing`.
-
-### Label discovery with multiple patterns
-
-When `on_change` is a list of patterns:
-- Labels are discovered from all patterns that contain `$var`
-- Patterns without `$var` are applied to all instances
-- The final file set for each instance is the union of files from all patterns
+| Segment  | Meaning                                             |
+|----------|-----------------------------------------------------|
+| `{name}` | Variable placeholder, substituted before glob       |
+| `*`      | Any name at one path level (standard glob)          |
+| `**`     | Any sub-path, zero or more levels (standard glob)   |
 
 ---
 
-## Matrix
+## Each
 
-Matrix decouples label generation from file watching. It is useful when:
-- Labels don't derive from file structure
-- Fixed combinations are needed (environments, configs)
-- Auto-discovery and explicit values should be mixed
-
-### Syntax
+`each` defines variable sources. All variables are expanded as a **cartesian product**, producing one test instance per combination.
 
 ```yaml
-matrix:
-  - const:
-      env: [prod, staging]
-      region: [us, eu]
-
-  - match:
-      - ./services/$service/
-    const:
-      tier: [api, worker]
-
-  - match:
-      - ./modules/$module/
+each:
+  service: ./services/*/
+  env: [prod, staging]
+watch: ./services/{service}/**
 ```
 
-### Entry types
+Each value in the `each` map is a **source**:
 
-**`const`** — explicit values, cartesian product within one entry:
+| Syntax | Result | Example |
+|---|---|---|
+| `./path/*/` | Directory names (trailing `/` = dirs only) | `service: ./services/*/` → `[auth, billing]` |
+| `./path/*` | File and directory names | `item: ./data/*` → `[foo.txt, bar]` |
+| `./path/*.ext` | File names without extension | `config: ./configs/*.yaml` → `[app, db]` |
+| `[a, b, c]` | Explicit list | `env: [prod, staging]` |
+
+Glob sources use standard glob syntax (including `**`), are filtered by the ignorefile, and exclude hidden files (starting with `.`). Results are sorted and deduplicated.
+
+Example: `each: {service: ./services/*/, env: [prod, staging]}` with `services/{auth, billing}/` produces 4 instances: `service=auth,env=prod`, `service=auth,env=staging`, `service=billing,env=prod`, `service=billing,env=staging`.
+
+---
+
+## Combinations
+
+When a cartesian product is not appropriate, `combinations` provides explicit control over which label sets are generated. Each entry is an object of variable sources (same syntax as `each`), and entries are combined via **union**.
 
 ```yaml
-- const:
-    A: [a, b]
-    B: [x, y]
-# produces: A=a,B=x  A=a,B=y  A=b,B=x  A=b,B=y
+combinations:
+  - db: [postgres, mysql]
+    suite: [full]
+  - db: [sqlite]
+    suite: [basic]
+watch: ./migrations/{db}/**
 ```
 
-**`match`** — discover values from filesystem (same algorithm as auto-discovery):
+This produces: `db=postgres,suite=full`, `db=mysql,suite=full`, `db=sqlite,suite=basic`.
+
+Within each entry, sources are expanded as a cartesian product (same as `each`). Across entries, results are unioned.
+
+Glob sources work inside `combinations` too:
 
 ```yaml
-- match:
-    - ./services/$name/
-# produces: name=auth  name=billing  (from filesystem)
+combinations:
+  - service: ./services/*/
+    env: [prod, staging]
+  - service: [legacy-monolith]
+    env: [prod]
 ```
-
-**`match` + `const`** — cartesian product of discovered and explicit:
-
-```yaml
-- match:
-    - ./services/$name/
-  const:
-    env: [prod, dev]
-# produces: name=auth,env=prod  name=auth,env=dev  name=billing,env=prod ...
-```
-
-### Combining entries
-
-Entries in the matrix list are combined via **union** (not cartesian product):
-
-```yaml
-matrix:
-  - const: {A: [a, b], B: [x]}
-  - const: {A: [c], B: [y, z]}
-# produces: A=a,B=x  A=b,B=x  A=c,B=y  A=c,B=z
-```
-
-### Interaction with on_change
-
-- Without `matrix`: `$var` in `on_change` = auto-discovery + substitution (sugar)
-- With `matrix`: matrix is the sole source of labels, `$var` in `on_change` is substitution only
-
-**Validation rules:**
-- `$var` in `on_change` not defined in `matrix` → **error**
-- `$var` in `matrix` not used in `on_change` → **warning** (instances will watch the same files)
 
 ---
 
@@ -243,7 +208,7 @@ Resolution order: exact → first-part → prefix.
 
 For each test instance:
 
-1. Expand `on_change` patterns into a file list (with label substitution)
+1. Expand `watch` patterns into a file list (with `{var}` substitution)
 2. Exclude the source lock file (`TEST.md.lock`) — it changes on every resolve
 3. Sort files alphabetically
 4. For each file: `sha256(relative_path + "\0" + file_content)`
@@ -282,7 +247,7 @@ outdated ── fail ─────────────────► fail
 
 The `ignorefile` frontmatter field (default: `.gitignore`) specifies a gitignore-format file. Matching entries are excluded from:
 
-1. **Label discovery** — ignored directories are not enumerated as `$var` values
+1. **Variable discovery** — ignored directories are not enumerated as variable values
 2. **File matching** — ignored files are not included in hash computation
 
 This prevents `__pycache__`, `node_modules`, build artifacts, etc. from affecting tests.
@@ -320,17 +285,17 @@ When using `include`, each TEST.md file has its own lock file storing state for 
 
 ---
 
-## Label substitution
+## Variable substitution
 
-Label variables (`$var`) are substituted in:
-- `on_change` patterns (for file matching)
+Variables use `{var}` syntax and are substituted in:
+- `watch` patterns (before file matching)
 - Test titles (in `get` output)
 - Test descriptions (in `get` output)
 
 This allows descriptions to reference the current label values:
 
 ```markdown
-# $service health check
+# {service} health check
 
-Verify that `$service` responds to healthcheck on `$env`.
+Verify that `{service}` responds to healthcheck on `{env}`.
 ```

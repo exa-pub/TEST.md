@@ -1,8 +1,6 @@
 package resolver
 
 import (
-	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -21,21 +19,17 @@ func BuildInstances(root string, defs []models.TestDefinition, ig *ignore.GitIgn
 
 	for i := range defs {
 		defn := &defs[i]
-		onChange := rebasePatterns(root, defn.SourceFile, defn.OnChange)
-		matrix := rebaseMatrix(root, defn.SourceFile, defn.Matrix)
+		watch := rebasePatterns(root, defn.SourceFile, defn.Watch)
+		each := rebaseEach(root, defn.SourceFile, defn.Each)
+		combinations := rebaseCombinations(root, defn.SourceFile, defn.Combinations)
 
 		var labelCombos []map[string]string
-		if len(matrix) > 0 {
-			if err := validateMatrixVars(defn); err != nil {
-				return nil, err
-			}
-			entries := make([]patterns.ExpandableEntry, len(matrix))
-			for j, m := range matrix {
-				entries[j] = patterns.ExpandableEntry{Match: m.Match, Const: m.Const}
-			}
-			labelCombos = patterns.ExpandMatrix(root, entries, ig)
+		if len(combinations) > 0 {
+			labelCombos = patterns.ExpandCombinations(root, combinations, ig)
+		} else if len(each) > 0 {
+			labelCombos = patterns.ExpandEach(root, each, ig)
 		} else {
-			labelCombos = patterns.EnumerateLabels(root, onChange, ig)
+			labelCombos = []map[string]string{{}}
 		}
 
 		// Exclude the lock file from hashing — it changes on every resolve.
@@ -46,10 +40,10 @@ func BuildInstances(root string, defs []models.TestDefinition, ig *ignore.GitIgn
 			var resolvedPatterns []string
 			allFiles := map[string]bool{}
 
-			for _, pat := range onChange {
+			for _, pat := range watch {
 				resolved := pat
 				for k, v := range labels {
-					resolved = strings.ReplaceAll(resolved, "$"+k, v)
+					resolved = strings.ReplaceAll(resolved, "{"+k+"}", v)
 				}
 				resolvedPatterns = append(resolvedPatterns, resolved)
 
@@ -200,72 +194,54 @@ func ChangedFiles(inst *models.TestInstance, rec *models.TestRecord) []string {
 	return result
 }
 
-func validateMatrixVars(defn *models.TestDefinition) error {
-	onChangeVars := map[string]bool{}
-	for _, pat := range defn.OnChange {
-		for _, v := range patterns.FindLabelVars(pat) {
-			onChangeVars[v] = true
-		}
-	}
-
-	matrixVars := map[string]bool{}
-	for _, entry := range defn.Matrix {
-		for _, pat := range entry.Match {
-			for _, v := range patterns.FindLabelVars(pat) {
-				matrixVars[v] = true
-			}
-		}
-		for k := range entry.Const {
-			matrixVars[k] = true
-		}
-	}
-
-	// $var in on_change not in matrix → error
-	for v := range onChangeVars {
-		if !matrixVars[v] {
-			return fmt.Errorf("test '%s': variable $%s in on_change not defined in matrix", defn.Title, v)
-		}
-	}
-
-	// $var in matrix not in on_change → warning (stderr)
-	for v := range matrixVars {
-		if !onChangeVars[v] {
-			fmt.Fprintf(os.Stderr, "Warning: test '%s': matrix variable $%s not used in on_change\n", defn.Title, v)
-		}
-	}
-
-	return nil
-}
-
-func rebasePatterns(root, sourceFile string, patterns []string) []string {
+func rebasePatterns(root, sourceFile string, pats []string) []string {
 	sourceDir := filepath.Dir(sourceFile)
 	if sourceDir == root {
-		return patterns
+		return pats
 	}
 	rel, err := filepath.Rel(root, sourceDir)
 	if err != nil {
-		return patterns
+		return pats
 	}
 	rel = filepath.ToSlash(rel)
 
-	rebased := make([]string, len(patterns))
-	for i, p := range patterns {
+	rebased := make([]string, len(pats))
+	for i, p := range pats {
 		p = strings.TrimPrefix(p, "./")
 		rebased[i] = "./" + rel + "/" + p
 	}
 	return rebased
 }
 
-func rebaseMatrix(root, sourceFile string, matrix []models.MatrixEntry) []models.MatrixEntry {
-	if len(matrix) == 0 || filepath.Dir(sourceFile) == root {
-		return matrix
+func rebaseEach(root, sourceFile string, each map[string]models.EachSource) map[string]models.EachSource {
+	if len(each) == 0 || filepath.Dir(sourceFile) == root {
+		return each
 	}
-	rebased := make([]models.MatrixEntry, len(matrix))
-	for i, entry := range matrix {
-		rebased[i] = models.MatrixEntry{Const: entry.Const}
-		if len(entry.Match) > 0 {
-			rebased[i].Match = rebasePatterns(root, sourceFile, entry.Match)
+	rel, err := filepath.Rel(root, filepath.Dir(sourceFile))
+	if err != nil {
+		return each
+	}
+	relSlash := filepath.ToSlash(rel)
+
+	rebased := make(map[string]models.EachSource, len(each))
+	for k, src := range each {
+		if src.Glob != "" {
+			g := strings.TrimPrefix(src.Glob, "./")
+			rebased[k] = models.EachSource{Glob: "./" + relSlash + "/" + g}
+		} else {
+			rebased[k] = src
 		}
+	}
+	return rebased
+}
+
+func rebaseCombinations(root, sourceFile string, combos []map[string]models.EachSource) []map[string]models.EachSource {
+	if len(combos) == 0 || filepath.Dir(sourceFile) == root {
+		return combos
+	}
+	rebased := make([]map[string]models.EachSource, len(combos))
+	for i, entry := range combos {
+		rebased[i] = rebaseEach(root, sourceFile, entry)
 	}
 	return rebased
 }

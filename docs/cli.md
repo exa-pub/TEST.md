@@ -8,7 +8,7 @@ All commands accept `--testmd PATH`:
 testmd [--testmd PATH] <command> [args]
 ```
 
-| `--testmd`        | TEST.md file                | Root directory (for on_change) |
+| `--testmd`        | TEST.md file                | Root directory (for watch)     |
 |-------------------|-----------------------------|-------------------------------|
 | not specified     | search upward from cwd      | directory of found file       |
 | path to directory | `<dir>/TEST.md`             | the directory                 |

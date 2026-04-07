@@ -1,5 +1,10 @@
 # TEST.md
 
+[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/exa-pub/test.md/actions/workflows/ci.yml/badge.svg)](https://github.com/exa-pub/test.md/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/exa-pub/test.md?logo=github)](https://github.com/exa-pub/test.md/releases/latest)
+
 Executable contracts for your codebase: "if you changed X, verify Y".
 
 ![testmd in terminal](docs/screenshot-terminal.png)

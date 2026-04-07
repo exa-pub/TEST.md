@@ -4,170 +4,155 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/testmd/testmd/internal/models"
 )
 
-func TestFindLabelVars(t *testing.T) {
-	t.Run("single_var", func(t *testing.T) {
-		result := FindLabelVars("$svc/src/**")
-		if len(result) != 1 || result[0] != "svc" {
-			t.Errorf("expected [svc], got %v", result)
+func TestDiscoverValues(t *testing.T) {
+	t.Run("explicit_list", func(t *testing.T) {
+		result := DiscoverValues("/tmp", models.EachSource{Values: []string{"b", "a", "c"}}, nil)
+		if len(result) != 3 || result[0] != "a" || result[1] != "b" || result[2] != "c" {
+			t.Errorf("expected sorted [a b c], got %v", result)
 		}
 	})
 
-	t.Run("multiple_vars", func(t *testing.T) {
-		result := FindLabelVars("$org/$repo/file")
-		if len(result) != 2 || result[0] != "org" || result[1] != "repo" {
-			t.Errorf("expected [org repo], got %v", result)
-		}
-	})
-
-	t.Run("no_vars", func(t *testing.T) {
-		result := FindLabelVars("src/**/*")
-		if len(result) != 0 {
-			t.Errorf("expected [], got %v", result)
-		}
-	})
-
-	t.Run("underscore_var", func(t *testing.T) {
-		result := FindLabelVars("$my_var/x")
-		if len(result) != 1 || result[0] != "my_var" {
-			t.Errorf("expected [my_var], got %v", result)
-		}
-	})
-}
-
-func TestEnumerateLabels(t *testing.T) {
-	t.Run("no_vars_returns_empty_dict", func(t *testing.T) {
-		result := EnumerateLabels("/tmp", []string{"src/**/*"}, nil)
-		if len(result) != 1 || len(result[0]) != 0 {
-			t.Errorf("expected [{}], got %v", result)
-		}
-	})
-
-	t.Run("discovers_dirs", func(t *testing.T) {
+	t.Run("glob_dirs", func(t *testing.T) {
 		tmp := t.TempDir()
-		os.MkdirAll(filepath.Join(tmp, "alpha", "src"), 0755)
-		os.MkdirAll(filepath.Join(tmp, "beta", "src"), 0755)
-		os.WriteFile(filepath.Join(tmp, "alpha", "src", "a.py"), []byte("a"), 0644)
-		os.WriteFile(filepath.Join(tmp, "beta", "src", "b.py"), []byte("b"), 0644)
+		os.MkdirAll(filepath.Join(tmp, "services", "auth"), 0755)
+		os.MkdirAll(filepath.Join(tmp, "services", "billing"), 0755)
+		os.WriteFile(filepath.Join(tmp, "services", "README.md"), []byte("x"), 0644)
 
-		result := EnumerateLabels(tmp, []string{"$svc/src"}, nil)
+		result := DiscoverValues(tmp, models.EachSource{Glob: "./services/*/"}, nil)
 		if len(result) != 2 {
-			t.Fatalf("expected 2 results, got %d: %v", len(result), result)
+			t.Fatalf("expected 2 dirs, got %d: %v", len(result), result)
 		}
-		found := map[string]bool{}
-		for _, r := range result {
-			found[r["svc"]] = true
-		}
-		if !found["alpha"] || !found["beta"] {
-			t.Errorf("expected alpha and beta, got %v", result)
+		if result[0] != "auth" || result[1] != "billing" {
+			t.Errorf("expected [auth billing], got %v", result)
 		}
 	})
 
-	t.Run("hidden_dirs_excluded", func(t *testing.T) {
+	t.Run("glob_files_strip_ext", func(t *testing.T) {
 		tmp := t.TempDir()
-		os.MkdirAll(filepath.Join(tmp, ".hidden", "src"), 0755)
-		os.MkdirAll(filepath.Join(tmp, "visible", "src"), 0755)
+		os.MkdirAll(filepath.Join(tmp, "configs"), 0755)
+		os.WriteFile(filepath.Join(tmp, "configs", "app.yaml"), []byte("x"), 0644)
+		os.WriteFile(filepath.Join(tmp, "configs", "db.yaml"), []byte("x"), 0644)
 
-		result := EnumerateLabels(tmp, []string{"$svc/src"}, nil)
-		if len(result) != 1 {
-			t.Fatalf("expected 1 result, got %d: %v", len(result), result)
-		}
-		if result[0]["svc"] != "visible" {
-			t.Errorf("expected svc=visible, got %v", result[0])
+		result := DiscoverValues(tmp, models.EachSource{Glob: "./configs/*.yaml"}, nil)
+		if len(result) != 2 || result[0] != "app" || result[1] != "db" {
+			t.Errorf("expected [app db], got %v", result)
 		}
 	})
 
-	t.Run("deduplicates", func(t *testing.T) {
+	t.Run("glob_files_no_strip", func(t *testing.T) {
 		tmp := t.TempDir()
-		os.MkdirAll(filepath.Join(tmp, "foo", "a"), 0755)
-		os.MkdirAll(filepath.Join(tmp, "foo", "b"), 0755)
+		os.MkdirAll(filepath.Join(tmp, "data"), 0755)
+		os.WriteFile(filepath.Join(tmp, "data", "foo.txt"), []byte("x"), 0644)
 
-		result := EnumerateLabels(tmp, []string{"$svc/a", "$svc/b"}, nil)
-		count := 0
-		for _, r := range result {
-			if r["svc"] == "foo" {
-				count++
-			}
+		result := DiscoverValues(tmp, models.EachSource{Glob: "./data/*"}, nil)
+		if len(result) != 1 || result[0] != "foo.txt" {
+			t.Errorf("expected [foo.txt], got %v", result)
 		}
-		if count != 1 {
-			t.Errorf("expected foo to appear once, got %d times in %v", count, result)
+	})
+
+	t.Run("hidden_excluded", func(t *testing.T) {
+		tmp := t.TempDir()
+		os.MkdirAll(filepath.Join(tmp, ".hidden"), 0755)
+		os.MkdirAll(filepath.Join(tmp, "visible"), 0755)
+
+		result := DiscoverValues(tmp, models.EachSource{Glob: "./*/"}, nil)
+		if len(result) != 1 || result[0] != "visible" {
+			t.Errorf("expected [visible], got %v", result)
+		}
+	})
+
+	t.Run("empty_glob", func(t *testing.T) {
+		result := DiscoverValues("/tmp", models.EachSource{Glob: ""}, nil)
+		if result != nil {
+			t.Errorf("expected nil, got %v", result)
 		}
 	})
 }
 
-func TestExpandMatrix(t *testing.T) {
-	t.Run("const_only", func(t *testing.T) {
-		matrix := []ExpandableEntry{
-			{Const: map[string][]string{"env": {"dev", "prod"}, "region": {"us", "eu"}}},
+func TestExpandEach(t *testing.T) {
+	t.Run("single_var_explicit", func(t *testing.T) {
+		each := map[string]models.EachSource{
+			"env": {Values: []string{"prod", "staging"}},
 		}
-		result := ExpandMatrix("/tmp", matrix, nil)
+		result := ExpandEach("/tmp", each, nil)
+		if len(result) != 2 {
+			t.Fatalf("expected 2 combos, got %d: %v", len(result), result)
+		}
+		assertContainsLabels(t, result, map[string]string{"env": "prod"})
+		assertContainsLabels(t, result, map[string]string{"env": "staging"})
+	})
+
+	t.Run("cartesian_product", func(t *testing.T) {
+		each := map[string]models.EachSource{
+			"env":    {Values: []string{"prod", "dev"}},
+			"region": {Values: []string{"us", "eu"}},
+		}
+		result := ExpandEach("/tmp", each, nil)
 		if len(result) != 4 {
 			t.Fatalf("expected 4 combos, got %d: %v", len(result), result)
 		}
-		assertContainsLabels(t, result, map[string]string{"env": "dev", "region": "us"})
-		assertContainsLabels(t, result, map[string]string{"env": "prod", "region": "eu"})
+		assertContainsLabels(t, result, map[string]string{"env": "prod", "region": "us"})
+		assertContainsLabels(t, result, map[string]string{"env": "dev", "region": "eu"})
 	})
 
-	t.Run("match_only", func(t *testing.T) {
+	t.Run("with_glob", func(t *testing.T) {
 		tmp := t.TempDir()
-		os.Mkdir(filepath.Join(tmp, "svcA"), 0755)
-		os.Mkdir(filepath.Join(tmp, "svcB"), 0755)
+		os.MkdirAll(filepath.Join(tmp, "svcA"), 0755)
+		os.MkdirAll(filepath.Join(tmp, "svcB"), 0755)
 
-		matrix := []ExpandableEntry{
-			{Match: []string{"$svc/"}},
+		each := map[string]models.EachSource{
+			"svc": {Glob: "./*/"},
 		}
-		result := ExpandMatrix(tmp, matrix, nil)
+		result := ExpandEach(tmp, each, nil)
+		if len(result) != 2 {
+			t.Fatalf("expected 2 combos, got %d: %v", len(result), result)
+		}
 		assertContainsLabels(t, result, map[string]string{"svc": "svcA"})
 		assertContainsLabels(t, result, map[string]string{"svc": "svcB"})
 	})
 
-	t.Run("match_plus_const", func(t *testing.T) {
-		tmp := t.TempDir()
-		os.Mkdir(filepath.Join(tmp, "web"), 0755)
-
-		matrix := []ExpandableEntry{
-			{Match: []string{"$svc/"}, Const: map[string][]string{"env": {"dev", "prod"}}},
-		}
-		result := ExpandMatrix(tmp, matrix, nil)
-		if len(result) != 2 {
-			t.Fatalf("expected 2 combos, got %d: %v", len(result), result)
-		}
-		assertContainsLabels(t, result, map[string]string{"svc": "web", "env": "dev"})
-		assertContainsLabels(t, result, map[string]string{"svc": "web", "env": "prod"})
-	})
-
-	t.Run("union_of_entries", func(t *testing.T) {
-		matrix := []ExpandableEntry{
-			{Const: map[string][]string{"x": {"1"}}},
-			{Const: map[string][]string{"x": {"2"}}},
-		}
-		result := ExpandMatrix("/tmp", matrix, nil)
-		if len(result) != 2 {
-			t.Fatalf("expected 2 combos, got %d: %v", len(result), result)
-		}
-		assertContainsLabels(t, result, map[string]string{"x": "1"})
-		assertContainsLabels(t, result, map[string]string{"x": "2"})
-	})
-
-	t.Run("empty_matrix_returns_empty_dict", func(t *testing.T) {
-		result := ExpandMatrix("/tmp", []ExpandableEntry{}, nil)
+	t.Run("empty_each", func(t *testing.T) {
+		result := ExpandEach("/tmp", map[string]models.EachSource{}, nil)
 		if len(result) != 1 || len(result[0]) != 0 {
 			t.Errorf("expected [{}], got %v", result)
 		}
 	})
+}
 
-	t.Run("const_scalar_value", func(t *testing.T) {
-		// In Go, the const map always has []string values, so a scalar is represented as a single-element slice
-		matrix := []ExpandableEntry{
-			{Const: map[string][]string{"env": {"prod"}}},
+func TestExpandCombinations(t *testing.T) {
+	t.Run("single_entry", func(t *testing.T) {
+		combos := []map[string]models.EachSource{
+			{"db": {Values: []string{"postgres", "mysql"}}, "suite": {Values: []string{"full"}}},
 		}
-		result := ExpandMatrix("/tmp", matrix, nil)
-		if len(result) != 1 {
-			t.Fatalf("expected 1 combo, got %d: %v", len(result), result)
+		result := ExpandCombinations("/tmp", combos, nil)
+		if len(result) != 2 {
+			t.Fatalf("expected 2 combos, got %d: %v", len(result), result)
 		}
-		if result[0]["env"] != "prod" {
-			t.Errorf("expected env=prod, got %v", result[0])
+		assertContainsLabels(t, result, map[string]string{"db": "postgres", "suite": "full"})
+		assertContainsLabels(t, result, map[string]string{"db": "mysql", "suite": "full"})
+	})
+
+	t.Run("union_of_entries", func(t *testing.T) {
+		combos := []map[string]models.EachSource{
+			{"db": {Values: []string{"postgres"}}, "suite": {Values: []string{"full"}}},
+			{"db": {Values: []string{"sqlite"}}, "suite": {Values: []string{"basic"}}},
+		}
+		result := ExpandCombinations("/tmp", combos, nil)
+		if len(result) != 2 {
+			t.Fatalf("expected 2 combos, got %d: %v", len(result), result)
+		}
+		assertContainsLabels(t, result, map[string]string{"db": "postgres", "suite": "full"})
+		assertContainsLabels(t, result, map[string]string{"db": "sqlite", "suite": "basic"})
+	})
+
+	t.Run("empty_returns_empty_dict", func(t *testing.T) {
+		result := ExpandCombinations("/tmp", []map[string]models.EachSource{}, nil)
+		if len(result) != 1 || len(result[0]) != 0 {
+			t.Errorf("expected [{}], got %v", result)
 		}
 	})
 }
@@ -178,7 +163,7 @@ func TestResolveFiles(t *testing.T) {
 		os.MkdirAll(filepath.Join(tmp, "web", "src"), 0755)
 		os.WriteFile(filepath.Join(tmp, "web", "src", "main.py"), []byte("x"), 0644)
 
-		result, err := ResolveFiles(tmp, "$svc/src/*.py", map[string]string{"svc": "web"}, nil)
+		result, err := ResolveFiles(tmp, "{svc}/src/*.py", map[string]string{"svc": "web"}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -187,7 +172,7 @@ func TestResolveFiles(t *testing.T) {
 		}
 	})
 
-	t.Run("double_star_normalization", func(t *testing.T) {
+	t.Run("double_star", func(t *testing.T) {
 		tmp := t.TempDir()
 		os.Mkdir(filepath.Join(tmp, "lib"), 0755)
 		os.WriteFile(filepath.Join(tmp, "lib", "a.py"), []byte("a"), 0644)

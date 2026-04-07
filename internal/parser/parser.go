@@ -10,38 +10,10 @@ import (
 	"github.com/testmd/testmd/internal/models"
 )
 
-var (
-	stateBlockRE = regexp.MustCompile(`(?s)<!-- State\n` + "```testmd\n" + `.*?` + "```\n" + `-->` + "\n?")
-	yamlBlockRE  = regexp.MustCompile("(?s)```ya?ml\n(.*?)```")
-)
+var yamlBlockRE = regexp.MustCompile("(?s)```ya?ml\n(.*?)```")
 
-// Frontmatter holds parsed frontmatter fields.
-type Frontmatter struct {
-	Include    []string `yaml:"include"`
-	Ignorefile string   `yaml:"ignorefile"`
-}
-
-// Parse parses TEST.md content into frontmatter and test definitions.
-func Parse(text, sourceFile string) (Frontmatter, []models.TestDefinition, error) {
-	var fm Frontmatter
-	lineOffset := 0
-
-	// 1. Extract frontmatter
-	if strings.HasPrefix(text, "---\n") {
-		end := strings.Index(text[4:], "\n---\n")
-		if end != -1 {
-			if err := yaml.Unmarshal([]byte(text[4:4+end]), &fm); err != nil {
-				return fm, nil, fmt.Errorf("invalid frontmatter: %w", err)
-			}
-			lineOffset = strings.Count(text[:4+end+5], "\n")
-			text = text[4+end+5:]
-		}
-	}
-
-	// 2. Strip state block
-	text = stateBlockRE.ReplaceAllString(text, "")
-
-	// 3. Parse tests
+// Parse parses TEST.md content into test definitions. No frontmatter.
+func Parse(text, sourceFile string) ([]models.TestDefinition, error) {
 	lines := strings.Split(text, "\n")
 	var tests []models.TestDefinition
 	i := 0
@@ -53,7 +25,7 @@ func Parse(text, sourceFile string) (Frontmatter, []models.TestDefinition, error
 		}
 
 		title := strings.TrimSpace(lines[i][2:])
-		sourceLine := i + 1 + lineOffset
+		sourceLine := i + 1
 		i++
 
 		var bodyLines []string
@@ -66,55 +38,94 @@ func Parse(text, sourceFile string) (Frontmatter, []models.TestDefinition, error
 
 		m := yamlBlockRE.FindStringSubmatchIndex(body)
 		if m == nil {
-			return fm, nil, fmt.Errorf("test '%s' (line %d): missing yaml config block", title, sourceLine)
+			return nil, fmt.Errorf("test '%s' (line %d): missing yaml config block", title, sourceLine)
 		}
 
 		yamlContent := body[m[2]:m[3]]
 		var config struct {
-			ID       string      `yaml:"id"`
-			OnChange interface{} `yaml:"on_change"`
-			Matrix   []struct {
-				Match interface{}         `yaml:"match"`
-				Const map[string][]string `yaml:"const"`
-			} `yaml:"matrix"`
+			ID           string                   `yaml:"id"`
+			Watch        interface{}               `yaml:"watch"`
+			Each         map[string]interface{}    `yaml:"each"`
+			Combinations []map[string]interface{}  `yaml:"combinations"`
 		}
 		if err := yaml.Unmarshal([]byte(yamlContent), &config); err != nil {
-			return fm, nil, fmt.Errorf("test '%s' (line %d): invalid yaml: %w", title, sourceLine, err)
+			return nil, fmt.Errorf("test '%s' (line %d): invalid yaml: %w", title, sourceLine, err)
 		}
 
-		onChange, err := toStringSlice(config.OnChange)
-		if err != nil || len(onChange) == 0 {
-			return fm, nil, fmt.Errorf("test '%s' (line %d): missing on_change", title, sourceLine)
+		watch, err := toStringSlice(config.Watch)
+		if err != nil || len(watch) == 0 {
+			return nil, fmt.Errorf("test '%s' (line %d): missing watch", title, sourceLine)
+		}
+
+		if config.Each != nil && config.Combinations != nil {
+			return nil, fmt.Errorf("test '%s' (line %d): cannot use both 'each' and 'combinations'", title, sourceLine)
+		}
+
+		var each map[string]models.EachSource
+		if config.Each != nil {
+			each, err = parseEachMap(config.Each)
+			if err != nil {
+				return nil, fmt.Errorf("test '%s' (line %d): invalid each: %w", title, sourceLine, err)
+			}
+		}
+
+		var combinations []map[string]models.EachSource
+		if config.Combinations != nil {
+			for j, entry := range config.Combinations {
+				parsed, err := parseEachMap(entry)
+				if err != nil {
+					return nil, fmt.Errorf("test '%s' (line %d): invalid combinations[%d]: %w", title, sourceLine, j, err)
+				}
+				combinations = append(combinations, parsed)
+			}
 		}
 
 		description := strings.TrimSpace(body[:m[0]] + body[m[1]:])
 
-		var matrix []models.MatrixEntry
-		if config.Matrix != nil {
-			for _, entry := range config.Matrix {
-				me := models.MatrixEntry{Const: entry.Const}
-				if entry.Match != nil {
-					me.Match, err = toStringSlice(entry.Match)
-					if err != nil {
-						return fm, nil, fmt.Errorf("test '%s' (line %d): invalid match in matrix: %w", title, sourceLine, err)
-					}
-				}
-				matrix = append(matrix, me)
-			}
-		}
-
 		tests = append(tests, models.TestDefinition{
-			Title:       title,
-			ExplicitID:  config.ID,
-			OnChange:    onChange,
-			Matrix:      matrix,
-			Description: description,
-			SourceFile:  sourceFile,
-			SourceLine:  sourceLine,
+			Title:        title,
+			ExplicitID:   config.ID,
+			Watch:        watch,
+			Each:         each,
+			Combinations: combinations,
+			Description:  description,
+			SourceFile:   sourceFile,
+			SourceLine:   sourceLine,
 		})
 	}
 
-	return fm, tests, nil
+	return tests, nil
+}
+
+func parseEachMap(raw map[string]interface{}) (map[string]models.EachSource, error) {
+	result := make(map[string]models.EachSource, len(raw))
+	for k, v := range raw {
+		src, err := parseEachSource(v)
+		if err != nil {
+			return nil, fmt.Errorf("variable '%s': %w", k, err)
+		}
+		result[k] = src
+	}
+	return result, nil
+}
+
+func parseEachSource(v interface{}) (models.EachSource, error) {
+	switch val := v.(type) {
+	case string:
+		return models.EachSource{Glob: val}, nil
+	case []interface{}:
+		values := make([]string, len(val))
+		for i, item := range val {
+			s, ok := item.(string)
+			if !ok {
+				return models.EachSource{}, fmt.Errorf("expected string, got %T", item)
+			}
+			values[i] = s
+		}
+		return models.EachSource{Values: values}, nil
+	default:
+		return models.EachSource{}, fmt.Errorf("expected string (glob) or list (values), got %T", v)
+	}
 }
 
 func toStringSlice(v interface{}) ([]string, error) {

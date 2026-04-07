@@ -3,25 +3,14 @@ package patterns
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
 	ignore "github.com/sabhiram/go-gitignore"
+
+	"github.com/testmd/testmd/internal/models"
 )
-
-var labelVarRE = regexp.MustCompile(`\$([a-zA-Z_]\w*)`)
-
-// FindLabelVars extracts $variable names from a pattern.
-func FindLabelVars(pattern string) []string {
-	matches := labelVarRE.FindAllStringSubmatch(pattern, -1)
-	result := make([]string, len(matches))
-	for i, m := range matches {
-		result[i] = m[1]
-	}
-	return result
-}
 
 // LoadIgnorefile loads a gitignore-format file from root.
 func LoadIgnorefile(root, filename string) *ignore.GitIgnore {
@@ -33,101 +22,106 @@ func LoadIgnorefile(root, filename string) *ignore.GitIgnore {
 	return ig
 }
 
-// EnumerateLabels discovers label combinations from on_change patterns.
-func EnumerateLabels(root string, patterns []string, ig *ignore.GitIgnore) []map[string]string {
-	var all []map[string]string
-	for _, pat := range patterns {
-		if len(FindLabelVars(pat)) == 0 {
+// DiscoverValues resolves an EachSource to a sorted, deduplicated list of values.
+func DiscoverValues(root string, src models.EachSource, ig *ignore.GitIgnore) []string {
+	if len(src.Values) > 0 {
+		sorted := make([]string, len(src.Values))
+		copy(sorted, src.Values)
+		sort.Strings(sorted)
+		return sorted
+	}
+
+	if src.Glob == "" {
+		return nil
+	}
+
+	pat := strings.TrimPrefix(src.Glob, "./")
+	dirsOnly := strings.HasSuffix(pat, "/")
+	pat = strings.TrimSuffix(pat, "/")
+
+	// Detect extension to strip: only if the last segment has a literal extension like *.yaml
+	lastSeg := filepath.Base(pat)
+	stripExt := ""
+	if idx := strings.LastIndex(lastSeg, "."); idx > 0 && strings.Contains(lastSeg[:idx], "*") {
+		stripExt = lastSeg[idx:]
+	}
+
+	fsys := os.DirFS(root)
+	matches, err := doublestar.Glob(fsys, pat)
+	if err != nil {
+		return nil
+	}
+
+	seen := map[string]bool{}
+	var result []string
+	for _, m := range matches {
+		rel := filepath.ToSlash(m)
+
+		// Filter: directories only if trailing /
+		full := filepath.Join(root, m)
+		info, err := os.Stat(full)
+		if err != nil {
 			continue
 		}
-		for _, combo := range enumeratePattern(root, pat, ig) {
-			if !containsLabels(all, combo) {
-				all = append(all, combo)
+		if dirsOnly && !info.IsDir() {
+			continue
+		}
+
+		// Filter: hidden files
+		base := filepath.Base(m)
+		if strings.HasPrefix(base, ".") {
+			continue
+		}
+
+		// Filter: ignorefile
+		if ig != nil {
+			checkPath := rel
+			if info.IsDir() {
+				checkPath += "/"
+			}
+			if ig.MatchesPath(checkPath) {
+				continue
 			}
 		}
-	}
-	if len(all) == 0 {
-		return []map[string]string{{}}
-	}
-	return all
-}
 
-// ExpandMatrix expands matrix entries into label combinations (union).
-func ExpandMatrix(root string, matrix []ExpandableEntry, ig *ignore.GitIgnore) []map[string]string {
-	var all []map[string]string
-	for _, entry := range matrix {
-		for _, combo := range expandEntry(root, entry, ig) {
-			if !containsLabels(all, combo) {
-				all = append(all, combo)
-			}
+		name := base
+		if stripExt != "" && strings.HasSuffix(name, stripExt) {
+			name = strings.TrimSuffix(name, stripExt)
 		}
-	}
-	if len(all) == 0 {
-		return []map[string]string{{}}
-	}
-	return all
-}
 
-// ExpandableEntry mirrors models.MatrixEntry for decoupling.
-type ExpandableEntry struct {
-	Match []string
-	Const map[string][]string
-}
-
-func expandEntry(root string, entry ExpandableEntry, ig *ignore.GitIgnore) []map[string]string {
-	matchCombos := []map[string]string{{}}
-	if len(entry.Match) > 0 {
-		var discovered []map[string]string
-		for _, pat := range entry.Match {
-			for _, combo := range enumeratePattern(root, pat, ig) {
-				if !containsLabels(discovered, combo) {
-					discovered = append(discovered, combo)
-				}
-			}
-		}
-		if len(discovered) > 0 {
-			matchCombos = discovered
+		if !seen[name] {
+			seen[name] = true
+			result = append(result, name)
 		}
 	}
 
-	constCombos := []map[string]string{{}}
-	if len(entry.Const) > 0 {
-		constCombos = expandConst(entry.Const)
-	}
-
-	var result []map[string]string
-	for _, mc := range matchCombos {
-		for _, cc := range constCombos {
-			merged := make(map[string]string, len(mc)+len(cc))
-			for k, v := range mc {
-				merged[k] = v
-			}
-			for k, v := range cc {
-				merged[k] = v
-			}
-			result = append(result, merged)
-		}
-	}
+	sort.Strings(result)
 	return result
 }
 
-func expandConst(consts map[string][]string) []map[string]string {
-	keys := make([]string, 0, len(consts))
-	for k := range consts {
+// ExpandEach computes the cartesian product of all each-sources.
+func ExpandEach(root string, each map[string]models.EachSource, ig *ignore.GitIgnore) []map[string]string {
+	if len(each) == 0 {
+		return []map[string]string{{}}
+	}
+
+	// Sort keys for determinism
+	keys := make([]string, 0, len(each))
+	for k := range each {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 
 	result := []map[string]string{{}}
 	for _, key := range keys {
-		values := consts[key]
+		values := DiscoverValues(root, each[key], ig)
+		if len(values) == 0 {
+			return nil
+		}
 		var next []map[string]string
 		for _, combo := range result {
 			for _, val := range values {
-				newCombo := make(map[string]string, len(combo)+1)
-				for k, v := range combo {
-					newCombo[k] = v
-				}
+				newCombo := copyMap(combo)
 				newCombo[key] = val
 				next = append(next, newCombo)
 			}
@@ -137,62 +131,27 @@ func expandConst(consts map[string][]string) []map[string]string {
 	return result
 }
 
-func enumeratePattern(root, pattern string, ig *ignore.GitIgnore) []map[string]string {
-	pat := strings.TrimPrefix(pattern, "./")
-	parts := strings.Split(pat, "/")
-	return walk(root, root, parts, map[string]string{}, ig)
-}
-
-func walk(root, base string, parts []string, labels map[string]string, ig *ignore.GitIgnore) []map[string]string {
-	if len(parts) == 0 {
-		return []map[string]string{copyMap(labels)}
-	}
-
-	part := parts[0]
-	rest := parts[1:]
-
-	if strings.HasPrefix(part, "$") {
-		varName := part[1:]
-		entries, err := os.ReadDir(base)
-		if err != nil {
-			return nil
-		}
-		var results []map[string]string
-		for _, entry := range entries {
-			name := entry.Name()
-			if strings.HasPrefix(name, ".") {
-				continue
+// ExpandCombinations computes the union of entries, each entry is a cartesian product.
+func ExpandCombinations(root string, combos []map[string]models.EachSource, ig *ignore.GitIgnore) []map[string]string {
+	var all []map[string]string
+	for _, entry := range combos {
+		for _, combo := range ExpandEach(root, entry, ig) {
+			if !containsLabels(all, combo) {
+				all = append(all, combo)
 			}
-			entryPath := filepath.Join(base, name)
-			rel, _ := filepath.Rel(root, entryPath)
-			if ig != nil {
-				checkPath := filepath.ToSlash(rel)
-				if entry.IsDir() {
-					checkPath += "/"
-				}
-				if ig.MatchesPath(checkPath) {
-					continue
-				}
-			}
-			newLabels := copyMap(labels)
-			newLabels[varName] = name
-			results = append(results, walk(root, entryPath, rest, newLabels, ig)...)
 		}
-		return results
 	}
-
-	if strings.ContainsAny(part, "*?") {
-		return []map[string]string{copyMap(labels)}
+	if len(all) == 0 {
+		return []map[string]string{{}}
 	}
-
-	return walk(root, filepath.Join(base, part), rest, labels, ig)
+	return all
 }
 
 // ResolveFiles substitutes labels and globs for matching files.
 func ResolveFiles(root, pattern string, labels map[string]string, ig *ignore.GitIgnore) ([]string, error) {
 	resolved := pattern
 	for k, v := range labels {
-		resolved = strings.ReplaceAll(resolved, "$"+k, v)
+		resolved = strings.ReplaceAll(resolved, "{"+k+"}", v)
 	}
 	resolved = strings.TrimPrefix(resolved, "./")
 

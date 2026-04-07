@@ -1,8 +1,6 @@
 package resolver
 
 import (
-	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -19,37 +17,36 @@ import (
 func BuildInstances(root string, defs []models.TestDefinition, ig *ignore.GitIgnore) ([]*models.TestInstance, error) {
 	var instances []*models.TestInstance
 
+	// Lock file to exclude from hashing
+	const lockName = ".testmd.lock"
+
 	for i := range defs {
 		defn := &defs[i]
-		onChange := rebasePatterns(root, defn.SourceFile, defn.OnChange)
-		matrix := rebaseMatrix(root, defn.SourceFile, defn.Matrix)
+		watch := rebasePatterns(root, defn.SourceFile, defn.Watch)
+		each := rebaseEach(root, defn.SourceFile, defn.Each)
+		combinations := rebaseCombinations(root, defn.SourceFile, defn.Combinations)
 
 		var labelCombos []map[string]string
-		if len(matrix) > 0 {
-			if err := validateMatrixVars(defn); err != nil {
-				return nil, err
-			}
-			entries := make([]patterns.ExpandableEntry, len(matrix))
-			for j, m := range matrix {
-				entries[j] = patterns.ExpandableEntry{Match: m.Match, Const: m.Const}
-			}
-			labelCombos = patterns.ExpandMatrix(root, entries, ig)
+		if len(combinations) > 0 {
+			labelCombos = patterns.ExpandCombinations(root, combinations, ig)
+		} else if len(each) > 0 {
+			labelCombos = patterns.ExpandEach(root, each, ig)
 		} else {
-			labelCombos = patterns.EnumerateLabels(root, onChange, ig)
+			labelCombos = []map[string]string{{}}
 		}
 
-		// Self-exclusion: exclude the source TEST.md from its own hash.
-		selfRel, _ := filepath.Rel(root, defn.SourceFile)
-		selfRel = filepath.ToSlash(selfRel)
+		// Compute relative source path for ID generation
+		sourcePath, _ := filepath.Rel(root, defn.SourceFile)
+		sourcePath = filepath.ToSlash(sourcePath)
 
 		for _, labels := range labelCombos {
 			var resolvedPatterns []string
 			allFiles := map[string]bool{}
 
-			for _, pat := range onChange {
+			for _, pat := range watch {
 				resolved := pat
 				for k, v := range labels {
-					resolved = strings.ReplaceAll(resolved, "$"+k, v)
+					resolved = strings.ReplaceAll(resolved, "{"+k+"}", v)
 				}
 				resolvedPatterns = append(resolvedPatterns, resolved)
 
@@ -62,7 +59,7 @@ func BuildInstances(root string, defs []models.TestDefinition, ig *ignore.GitIgn
 				}
 			}
 
-			delete(allFiles, selfRel)
+			delete(allFiles, lockName)
 
 			matched := make([]string, 0, len(allFiles))
 			for f := range allFiles {
@@ -74,7 +71,7 @@ func BuildInstances(root string, defs []models.TestDefinition, ig *ignore.GitIgn
 			if err != nil {
 				return nil, err
 			}
-			tid := hashing.MakeID(defn.Title, defn.ExplicitID, labels)
+			tid := hashing.MakeID(defn.Title, defn.ExplicitID, labels, sourcePath)
 
 			instances = append(instances, &models.TestInstance{
 				ID:               tid,
@@ -109,18 +106,23 @@ func ComputeStatuses(instances []*models.TestInstance, st *models.State) []model
 }
 
 // ResolveTest marks a test as resolved.
-func ResolveTest(st *models.State, inst *models.TestInstance) {
+func ResolveTest(st *models.State, inst *models.TestInstance, root string) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	st.Tests[inst.ID] = makeRecord(inst, "resolved")
+	st.Tests[inst.ID] = makeRecord(inst, "resolved", root)
 	st.Tests[inst.ID].ResolvedAt = &now
 }
 
 // FailTest marks a test as failed with a message.
-func FailTest(st *models.State, inst *models.TestInstance, message string) {
+func FailTest(st *models.State, inst *models.TestInstance, message string, root string) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	st.Tests[inst.ID] = makeRecord(inst, "failed")
+	st.Tests[inst.ID] = makeRecord(inst, "failed", root)
 	st.Tests[inst.ID].FailedAt = &now
 	st.Tests[inst.ID].Message = &message
+}
+
+// ResetTest removes the state record for a test, returning it to pending.
+func ResetTest(st *models.State, inst *models.TestInstance) {
+	delete(st.Tests, inst.ID)
 }
 
 // GCState removes orphaned test records. Returns the count removed.
@@ -141,39 +143,22 @@ func GCState(st *models.State, instances []*models.TestInstance) int {
 	return len(orphans)
 }
 
-// FindInstances finds instances matching a full id, first-part, or prefix.
+// FindInstances finds instances matching by prefix (pure prefix match).
 func FindInstances(instances []*models.TestInstance, query string) []*models.TestInstance {
-	// Exact match
-	var exact []*models.TestInstance
+	// Exact match first
 	for _, inst := range instances {
 		if inst.ID == query {
-			exact = append(exact, inst)
+			return []*models.TestInstance{inst}
 		}
 	}
-	if len(exact) > 0 {
-		return exact
-	}
-
-	// First-part match
-	var byFirst []*models.TestInstance
-	for _, inst := range instances {
-		parts := strings.SplitN(inst.ID, "-", 2)
-		if parts[0] == query {
-			byFirst = append(byFirst, inst)
-		}
-	}
-	if len(byFirst) > 0 {
-		return byFirst
-	}
-
 	// Prefix match
-	var byPrefix []*models.TestInstance
+	var matches []*models.TestInstance
 	for _, inst := range instances {
 		if strings.HasPrefix(inst.ID, query) {
-			byPrefix = append(byPrefix, inst)
+			matches = append(matches, inst)
 		}
 	}
-	return byPrefix
+	return matches
 }
 
 // ChangedFiles returns files that differ between instance and stored record.
@@ -200,77 +185,59 @@ func ChangedFiles(inst *models.TestInstance, rec *models.TestRecord) []string {
 	return result
 }
 
-func validateMatrixVars(defn *models.TestDefinition) error {
-	onChangeVars := map[string]bool{}
-	for _, pat := range defn.OnChange {
-		for _, v := range patterns.FindLabelVars(pat) {
-			onChangeVars[v] = true
-		}
-	}
-
-	matrixVars := map[string]bool{}
-	for _, entry := range defn.Matrix {
-		for _, pat := range entry.Match {
-			for _, v := range patterns.FindLabelVars(pat) {
-				matrixVars[v] = true
-			}
-		}
-		for k := range entry.Const {
-			matrixVars[k] = true
-		}
-	}
-
-	// $var in on_change not in matrix → error
-	for v := range onChangeVars {
-		if !matrixVars[v] {
-			return fmt.Errorf("test '%s': variable $%s in on_change not defined in matrix", defn.Title, v)
-		}
-	}
-
-	// $var in matrix not in on_change → warning (stderr)
-	for v := range matrixVars {
-		if !onChangeVars[v] {
-			fmt.Fprintf(os.Stderr, "Warning: test '%s': matrix variable $%s not used in on_change\n", defn.Title, v)
-		}
-	}
-
-	return nil
-}
-
-func rebasePatterns(root, sourceFile string, patterns []string) []string {
+func rebasePatterns(root, sourceFile string, pats []string) []string {
 	sourceDir := filepath.Dir(sourceFile)
 	if sourceDir == root {
-		return patterns
+		return pats
 	}
 	rel, err := filepath.Rel(root, sourceDir)
 	if err != nil {
-		return patterns
+		return pats
 	}
 	rel = filepath.ToSlash(rel)
 
-	rebased := make([]string, len(patterns))
-	for i, p := range patterns {
+	rebased := make([]string, len(pats))
+	for i, p := range pats {
 		p = strings.TrimPrefix(p, "./")
 		rebased[i] = "./" + rel + "/" + p
 	}
 	return rebased
 }
 
-func rebaseMatrix(root, sourceFile string, matrix []models.MatrixEntry) []models.MatrixEntry {
-	if len(matrix) == 0 || filepath.Dir(sourceFile) == root {
-		return matrix
+func rebaseEach(root, sourceFile string, each map[string]models.EachSource) map[string]models.EachSource {
+	if len(each) == 0 || filepath.Dir(sourceFile) == root {
+		return each
 	}
-	rebased := make([]models.MatrixEntry, len(matrix))
-	for i, entry := range matrix {
-		rebased[i] = models.MatrixEntry{Const: entry.Const}
-		if len(entry.Match) > 0 {
-			rebased[i].Match = rebasePatterns(root, sourceFile, entry.Match)
+	rel, err := filepath.Rel(root, filepath.Dir(sourceFile))
+	if err != nil {
+		return each
+	}
+	relSlash := filepath.ToSlash(rel)
+
+	rebased := make(map[string]models.EachSource, len(each))
+	for k, src := range each {
+		if src.Glob != "" {
+			g := strings.TrimPrefix(src.Glob, "./")
+			rebased[k] = models.EachSource{Glob: "./" + relSlash + "/" + g}
+		} else {
+			rebased[k] = src
 		}
 	}
 	return rebased
 }
 
-func makeRecord(inst *models.TestInstance, status string) *models.TestRecord {
+func rebaseCombinations(root, sourceFile string, combos []map[string]models.EachSource) []map[string]models.EachSource {
+	if len(combos) == 0 || filepath.Dir(sourceFile) == root {
+		return combos
+	}
+	rebased := make([]map[string]models.EachSource, len(combos))
+	for i, entry := range combos {
+		rebased[i] = rebaseEach(root, sourceFile, entry)
+	}
+	return rebased
+}
+
+func makeRecord(inst *models.TestInstance, status string, root string) *models.TestRecord {
 	labels := inst.Labels
 	if labels == nil {
 		labels = map[string]string{}
@@ -279,8 +246,11 @@ func makeRecord(inst *models.TestInstance, status string) *models.TestRecord {
 	if files == nil {
 		files = map[string]string{}
 	}
+	source, _ := filepath.Rel(root, inst.Definition.SourceFile)
+	source = filepath.ToSlash(source)
 	return &models.TestRecord{
 		Title:       inst.Definition.Title,
+		Source:      source,
 		Labels:      labels,
 		ContentHash: inst.ContentHash,
 		Files:       files,

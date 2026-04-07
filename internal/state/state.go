@@ -1,30 +1,30 @@
 package state
 
 import (
-	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
-	"regexp"
+	"path/filepath"
+	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/testmd/testmd/internal/models"
 )
 
-var stateRE = regexp.MustCompile(`(?s)<!-- State\n` + "```testmd\n" + `(.*?)` + "```\n" + `-->` + "\n?")
-
-// Load extracts state from the <!-- State --> block in a TEST.md file.
-func Load(testFile string) (*models.State, error) {
-	data, err := os.ReadFile(testFile)
+// Load reads state from a YAML lock file. Returns empty state if file does not exist.
+func Load(lockFile string) (*models.State, error) {
+	data, err := os.ReadFile(lockFile)
 	if err != nil {
-		return &models.State{Version: 1, Tests: map[string]*models.TestRecord{}}, nil
-	}
-
-	m := stateRE.FindSubmatch(data)
-	if m == nil {
-		return &models.State{Version: 1, Tests: map[string]*models.TestRecord{}}, nil
+		if errors.Is(err, os.ErrNotExist) {
+			return &models.State{Version: 1, Tests: map[string]*models.TestRecord{}}, nil
+		}
+		return nil, err
 	}
 
 	var st models.State
-	if err := json.Unmarshal(m[1], &st); err != nil {
+	if err := yaml.Unmarshal(data, &st); err != nil {
 		return nil, err
 	}
 	if st.Tests == nil {
@@ -33,43 +33,119 @@ func Load(testFile string) (*models.State, error) {
 	return &st, nil
 }
 
-// Save writes state as formatted JSON into the <!-- State --> block.
-func Save(testFile string, st *models.State) error {
-	data, err := os.ReadFile(testFile)
-	if err != nil {
+// Save writes state as deterministic YAML using atomic write (temp + rename).
+// If state has no tests, the lock file is deleted.
+func Save(lockFile string, st *models.State) error {
+	// Clean up stale temp file from previous crash
+	tmp := lockFile + ".tmp"
+	os.Remove(tmp)
+
+	if len(st.Tests) == 0 {
+		err := os.Remove(lockFile)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 		return err
 	}
 
-	body, err := json.MarshalIndent(st, "", "  ")
-	if err != nil {
+	data := marshalState(st)
+
+	if err := os.MkdirAll(filepath.Dir(lockFile), 0755); err != nil {
 		return err
 	}
-	block := "<!-- State\n```testmd\n" + string(body) + "\n```\n-->\n"
 
-	text := string(data)
-	loc := stateRE.FindStringIndex(text)
-	if loc != nil {
-		text = text[:loc[0]] + block
-	} else {
-		text = strings.TrimRight(text, "\n") + "\n\n" + block
+	// Atomic write: temp file + rename
+	if err := os.WriteFile(tmp, []byte(data), 0644); err != nil {
+		return err
 	}
-
-	return os.WriteFile(testFile, []byte(text), 0644)
+	return os.Rename(tmp, lockFile)
 }
 
-// StripBlock removes the state block from a TEST.md file if present.
-func StripBlock(testFile string) error {
-	data, err := os.ReadFile(testFile)
-	if err != nil {
-		return nil // file doesn't exist — nothing to strip
+// marshalState produces deterministic YAML with controlled key order.
+// Tests sorted by ID, labels by key, files by path. Block-style only.
+func marshalState(st *models.State) string {
+	var b strings.Builder
+	b.WriteString("version: 1\n")
+	b.WriteString("tests:\n")
+
+	ids := make([]string, 0, len(st.Tests))
+	for id := range st.Tests {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	for _, id := range ids {
+		rec := st.Tests[id]
+		fmt.Fprintf(&b, "  %s:\n", id)
+
+		// Scalar fields first (for compact diffs)
+		fmt.Fprintf(&b, "    title: %s\n", yamlQuote(rec.Title))
+		fmt.Fprintf(&b, "    source: %s\n", yamlQuote(rec.Source))
+		fmt.Fprintf(&b, "    status: %s\n", rec.Status)
+		fmt.Fprintf(&b, "    content_hash: %s\n", yamlQuote(rec.ContentHash))
+		writeNullable(&b, "    ", "resolved_at", rec.ResolvedAt)
+		writeNullable(&b, "    ", "failed_at", rec.FailedAt)
+		writeNullable(&b, "    ", "message", rec.Message)
+
+		// Labels (sorted by key)
+		writeStringMap(&b, "    ", "labels", rec.Labels)
+
+		// Files (sorted by path)
+		writeStringMap(&b, "    ", "files", rec.Files)
 	}
 
-	text := string(data)
-	loc := stateRE.FindStringIndex(text)
-	if loc == nil {
-		return nil
-	}
+	return b.String()
+}
 
-	text = strings.TrimRight(text[:loc[0]], "\n") + "\n"
-	return os.WriteFile(testFile, []byte(text), 0644)
+func writeNullable(b *strings.Builder, indent, key string, val *string) {
+	if val == nil {
+		fmt.Fprintf(b, "%s%s: null\n", indent, key)
+	} else {
+		fmt.Fprintf(b, "%s%s: %s\n", indent, key, yamlQuote(*val))
+	}
+}
+
+func writeStringMap(b *strings.Builder, indent, key string, m map[string]string) {
+	if len(m) == 0 {
+		fmt.Fprintf(b, "%s%s: {}\n", indent, key)
+		return
+	}
+	fmt.Fprintf(b, "%s%s:\n", indent, key)
+	keys := sortedKeys(m)
+	for _, k := range keys {
+		fmt.Fprintf(b, "%s  %s: %s\n", indent, k, yamlQuote(m[k]))
+	}
+}
+
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func yamlQuote(s string) string {
+	if s == "" || s == "null" || s == "true" || s == "false" ||
+		strings.ContainsAny(s, ":{}[]#&*!|>'\",\n") ||
+		strings.HasPrefix(s, " ") || strings.HasSuffix(s, " ") ||
+		looksNumeric(s) {
+		return fmt.Sprintf("%q", s)
+	}
+	return s
+}
+
+func looksNumeric(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			if c != '.' && c != '-' && c != '+' && c != 'e' && c != 'E' {
+				return false
+			}
+		}
+	}
+	return true
 }
